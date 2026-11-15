@@ -23,13 +23,17 @@ installer. Builds are for Apple Silicon Macs (M1 and later) only.
    - **yt-dlp** finds the audio for each YouTube video.
    - **Deno** is needed by yt-dlp to work with YouTube.
 
-3. Open the app. The first time, macOS will warn that the app is from an unidentified
-   developer, because it isn't signed. To open it anyway, right-click **wamptube** in
-   Applications and choose **Open**. Or run this once in Terminal:
+3. Open the app. Because it isn't signed, macOS will refuse the first time, usually with
+   "wamptube is damaged and can't be opened". The app is fine; macOS is blocking it
+   because it was downloaded. Run this once in Terminal to clear the block, then open it
+   again:
 
    ```bash
    xattr -dr com.apple.quarantine /Applications/wamptube.app
    ```
+
+   (If you only see an "unidentified developer" warning instead, right-clicking
+   **wamptube** in Applications and choosing **Open** also works.)
 
 Keep yt-dlp up to date. YouTube changes often, and an old copy may find songs that then
 refuse to play:
