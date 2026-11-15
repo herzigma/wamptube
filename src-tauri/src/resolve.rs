@@ -8,6 +8,8 @@ use serde_json::Value;
 use tokio::process::Command;
 
 const YTDLP_TIMEOUT: Duration = Duration::from_secs(20);
+/// Listing a long playlist pages through it; give it longer than one resolve.
+const LIST_TIMEOUT: Duration = Duration::from_secs(60);
 const FORMAT: &str = "bestaudio[ext=m4a]/bestaudio";
 const FALLBACK_DIRS: &[&str] = &["/opt/homebrew/bin", "/usr/local/bin"];
 const DEFAULT_TTL_S: i64 = 6 * 60 * 60;
@@ -172,18 +174,14 @@ pub fn parse_ytdlp_json(video_id: &str, json: &str) -> Result<ResolvedTrack, Str
     })
 }
 
-/// Run yt-dlp for `video_id` (validated here) with a hard timeout.
-pub async fn resolve(video_id: &str) -> Result<ResolvedTrack, String> {
-    if !is_valid_video_id(video_id) {
-        return Err(format!("Invalid video id: {video_id:?} (expected 11 chars of A-Z a-z 0-9 _ -)"));
-    }
+/// Run yt-dlp with `args` and a hard timeout; returns stdout. stderr is
+/// echoed with a `[yt-dlp]` prefix. `what` names the job in error messages.
+async fn run_ytdlp(args: &[&str], timeout: Duration, what: &str) -> Result<String, String> {
     let ytdlp = find_ytdlp().ok_or_else(|| {
         "yt-dlp not found (looked on PATH, /opt/homebrew/bin, /usr/local/bin). Install it with `brew install yt-dlp`.".to_string()
     })?;
-
-    let url = format!("https://www.youtube.com/watch?v={video_id}");
     let child = Command::new(&ytdlp)
-        .args(["-j", "--no-playlist", "--no-update", "-f", FORMAT, &url])
+        .args(args)
         .env("PATH", child_path())
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
@@ -194,13 +192,8 @@ pub async fn resolve(video_id: &str) -> Result<ResolvedTrack, String> {
 
     // On timeout the future (and the Child it owns) is dropped; kill_on_drop
     // sends SIGKILL to the process.
-    let out = match tokio::time::timeout(YTDLP_TIMEOUT, child.wait_with_output()).await {
-        Err(_) => {
-            return Err(format!(
-                "yt-dlp timed out after {}s resolving {video_id}",
-                YTDLP_TIMEOUT.as_secs()
-            ))
-        }
+    let out = match tokio::time::timeout(timeout, child.wait_with_output()).await {
+        Err(_) => return Err(format!("yt-dlp timed out after {}s {what}", timeout.as_secs())),
         Ok(Err(e)) => return Err(format!("yt-dlp failed to run: {e}")),
         Ok(Ok(o)) => o,
     };
@@ -211,12 +204,146 @@ pub async fn resolve(video_id: &str) -> Result<ResolvedTrack, String> {
     }
     if !out.status.success() {
         return Err(format!(
-            "Video unavailable or extraction failed: {}",
+            "Unavailable or extraction failed: {}",
             last_stderr_line(&stderr)
         ));
     }
-    let stdout = String::from_utf8_lossy(&out.stdout);
+    Ok(String::from_utf8_lossy(&out.stdout).into_owned())
+}
+
+/// Run yt-dlp for `video_id` (validated here) with a hard timeout.
+pub async fn resolve(video_id: &str) -> Result<ResolvedTrack, String> {
+    if !is_valid_video_id(video_id) {
+        return Err(format!("Invalid video id: {video_id:?} (expected 11 chars of A-Z a-z 0-9 _ -)"));
+    }
+    let url = format!("https://www.youtube.com/watch?v={video_id}");
+    let stdout = run_ytdlp(
+        &["-j", "--no-playlist", "--no-update", "-f", FORMAT, &url],
+        YTDLP_TIMEOUT,
+        &format!("resolving {video_id}"),
+    )
+    .await?;
     parse_ytdlp_json(video_id, &stdout)
+}
+
+/// A playlist or a single video, as named in the config file or the UI.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Source {
+    Playlist(String),
+    Video(String),
+}
+
+impl Source {
+    /// The URL handed to yt-dlp and stored in the config file.
+    pub fn canonical_url(&self) -> String {
+        match self {
+            Source::Playlist(id) => format!("https://www.youtube.com/playlist?list={id}"),
+            Source::Video(id) => format!("https://www.youtube.com/watch?v={id}"),
+        }
+    }
+}
+
+fn is_valid_playlist_id(id: &str) -> bool {
+    (2..=64).contains(&id.len())
+        && id
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
+}
+
+/// Accepts a bare video id, a bare playlist id, or a YouTube / youtu.be /
+/// YouTube Studio URL. Only YouTube hosts are accepted, so arbitrary URLs never
+/// reach yt-dlp. A watch URL that also has `list=` counts as the video.
+pub fn parse_source(input: &str) -> Result<Source, String> {
+    let s = input.trim();
+    let bad = || format!("Not a YouTube video or playlist: {s:?}");
+    if is_valid_video_id(s) {
+        return Ok(Source::Video(s.to_string()));
+    }
+    if !s.contains(['/', '.', ':', '?']) {
+        return if is_valid_playlist_id(s) { Ok(Source::Playlist(s.to_string())) } else { Err(bad()) };
+    }
+    let with_scheme = if s.contains("://") { s.to_string() } else { format!("https://{s}") };
+    let u = reqwest::Url::parse(&with_scheme).map_err(|_| bad())?;
+    if !matches!(u.scheme(), "http" | "https") {
+        return Err(bad());
+    }
+    let host = u.host_str().unwrap_or("").to_ascii_lowercase();
+    let q = |k: &str| u.query_pairs().find(|(n, _)| n == k).map(|(_, v)| v.into_owned());
+    let segs: Vec<&str> = u.path_segments().map(|p| p.filter(|s| !s.is_empty()).collect()).unwrap_or_default();
+    let video = |id: &str| if is_valid_video_id(id) { Ok(Source::Video(id.to_string())) } else { Err(bad()) };
+    let playlist = |id: &str| if is_valid_playlist_id(id) { Ok(Source::Playlist(id.to_string())) } else { Err(bad()) };
+    match host.as_str() {
+        "youtu.be" => video(segs.first().copied().unwrap_or("")),
+        "studio.youtube.com" => match segs.as_slice() {
+            ["playlist", id, ..] => playlist(id),
+            ["video", id, ..] => video(id),
+            _ => Err(bad()),
+        },
+        "youtube.com" | "www.youtube.com" | "m.youtube.com" | "music.youtube.com" => {
+            if let Some(v) = q("v") {
+                return video(&v);
+            }
+            match segs.as_slice() {
+                ["playlist"] => playlist(&q("list").ok_or_else(bad)?),
+                ["shorts" | "live" | "embed", id, ..] => video(id),
+                _ => Err(bad()),
+            }
+        }
+        _ => Err(bad()),
+    }
+}
+
+/// One playlist row: enough to show it and to resolve it later.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Entry {
+    pub video_id: String,
+    pub title: String,
+    pub channel: Option<String>,
+    pub duration_s: u32,
+}
+
+const UNAVAILABLE_TITLES: &[&str] = &["[Private video]", "[Deleted video]", "[Unavailable video]"];
+
+fn entry_from(v: &Value) -> Option<Entry> {
+    let video_id = as_string(v.get("id")).filter(|id| is_valid_video_id(id))?;
+    let title = as_string(v.get("title")).unwrap_or_else(|| video_id.clone());
+    if UNAVAILABLE_TITLES.contains(&title.as_str()) {
+        eprintln!("[resolve] skipping {video_id}: {title}");
+        return None;
+    }
+    Some(Entry {
+        channel: as_string(v.get("channel")).or_else(|| as_string(v.get("uploader"))),
+        duration_s: as_u32(v.get("duration")).unwrap_or(0),
+        title,
+        video_id,
+    })
+}
+
+/// Parse `yt-dlp -J --flat-playlist`: a playlist (with `entries`) or one video.
+pub fn parse_flat_json(json: &str) -> Result<Vec<Entry>, String> {
+    let root: Value = serde_json::from_str(json.trim())
+        .map_err(|e| format!("Unparseable yt-dlp output: {e}"))?;
+    match root.get("entries").and_then(Value::as_array) {
+        Some(list) => Ok(list.iter().filter_map(entry_from).collect()),
+        None => entry_from(&root)
+            .map(|e| vec![e])
+            .ok_or_else(|| "Unparseable yt-dlp output: no video id".into()),
+    }
+}
+
+/// List a source's videos without resolving any stream URLs. For a playlist
+/// this is one cheap request; for a single video yt-dlp extracts it fully.
+pub async fn list(source: &Source) -> Result<Vec<Entry>, String> {
+    let url = source.canonical_url();
+    let mut args = vec!["-J", "--flat-playlist", "--no-update"];
+    if matches!(source, Source::Video(_)) {
+        args.extend(["--no-playlist", "--ignore-no-formats-error"]);
+    }
+    args.push(&url);
+    let stdout = run_ytdlp(&args, LIST_TIMEOUT, &format!("listing {url}")).await?;
+    let entries = parse_flat_json(&stdout)?;
+    eprintln!("[resolve] listed {url}: {} entries", entries.len());
+    Ok(entries)
 }
 
 #[cfg(test)]
@@ -246,5 +373,43 @@ mod tests {
         assert_eq!(t.expires_at, 1794742059);
         assert_eq!(t.headers, vec![("User-Agent".into(), "UA".into())]);
         assert!(parse_ytdlp_json("x", "WARNING nope").unwrap_err().starts_with("Unparseable"));
+    }
+
+    #[test]
+    fn parses_sources() {
+        use Source::*;
+        let p = |s: &str| parse_source(s);
+        let pl = "PLhMuGX-q2si_M5d8KCBibBf6njb-414fs";
+        assert_eq!(p("Hf20ZzMRs-I"), Ok(Video("Hf20ZzMRs-I".into())));
+        assert_eq!(p(pl), Ok(Playlist(pl.into())));
+        assert_eq!(p(&format!("https://www.youtube.com/playlist?list={pl}")), Ok(Playlist(pl.into())));
+        assert_eq!(p(&format!("youtube.com/playlist?list={pl}")), Ok(Playlist(pl.into())));
+        assert_eq!(p(&format!("https://studio.youtube.com/playlist/{pl}/videos")), Ok(Playlist(pl.into())));
+        assert_eq!(p(&format!("https://www.youtube.com/watch?v=Hf20ZzMRs-I&list={pl}")), Ok(Video("Hf20ZzMRs-I".into())));
+        assert_eq!(p("https://youtu.be/Hf20ZzMRs-I?t=3"), Ok(Video("Hf20ZzMRs-I".into())));
+        assert_eq!(p("https://m.youtube.com/shorts/Hf20ZzMRs-I"), Ok(Video("Hf20ZzMRs-I".into())));
+        assert!(p("https://evil.example/watch?v=Hf20ZzMRs-I").is_err());
+        assert!(p("file:///etc/passwd").is_err());
+        assert!(p("https://www.youtube.com/playlist?list=a;b").is_err());
+        assert!(p("").is_err());
+        assert_eq!(
+            Video("Hf20ZzMRs-I".into()).canonical_url(),
+            "https://www.youtube.com/watch?v=Hf20ZzMRs-I"
+        );
+    }
+
+    #[test]
+    fn parses_flat_playlist_and_single_video() {
+        let j = r#"{"_type":"playlist","entries":[
+            {"id":"l5cdI3DdSyw","title":"Mix","channel":"AcidJazz","duration":9207.0},
+            {"id":"xXBNlApwh0c","title":"[Private video]","duration":null},
+            {"id":"FJdNFcDNR14","title":"Electric Feel","uploader":"Scary Pockets"}]}"#;
+        let e = parse_flat_json(j).unwrap();
+        assert_eq!(e.len(), 2);
+        assert_eq!(e[0].duration_s, 9207);
+        assert_eq!(e[1].channel.as_deref(), Some("Scary Pockets"));
+        assert_eq!(e[1].duration_s, 0);
+        let v = parse_flat_json(r#"{"id":"Hf20ZzMRs-I","title":"T","channel":"C","duration":335}"#).unwrap();
+        assert_eq!(v[0].video_id, "Hf20ZzMRs-I");
     }
 }

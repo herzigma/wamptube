@@ -112,6 +112,24 @@ From about 00:30 to 00:55 local, youtube.com and googlevideo.com timed out from 
 while google.com worked. Cause unknown; it cleared on its own. The failure path behaved: each
 resolve failed at 20 s with a visible "yt-dlp timed out" message, no hang or crash.
 
+### 7. Playlists from the config file; resolving on first play
+
+Tracks now come from `~/.config/wamptube/config.toml` (see CLAUDE.md). Startup runs one
+`yt-dlp -J --flat-playlist` per source: the 56-video test playlist lists in about 2 s with titles,
+channels and durations, and resolves nothing. Each track's URL is `/v/{video_id}` on the proxy,
+which runs the full resolve on the first request for that video.
+
+- Webamp measures any track without a `duration` by fetching it, so `duration` is always passed.
+  Webamp still buffers track 1 at launch: one resolve at startup, verified in the dev log.
+- WebKit sometimes cancels its first request for a new track and retries. When the resolve ran
+  inside the request handler, the cancel killed yt-dlp and the retry started over (two resolves
+  for `u1MqeDGBo94`). The resolve now runs in a detached task; one resolve per video, verified.
+- Cost: a track's first play now waits for the resolve (~3 s) plus `available_at` (~6 s), about
+  10 s of silence with no UI feedback. The self-test waits for playback to start instead of a
+  fixed 12 s. Resolving the next track while the current one plays would hide this.
+- Self-test (`VITE_SELFTEST=1`, three test ids via `/v/`): all checks pass on all three tracks.
+- ADD > URL and dropping a link are built but not yet clicked through in the real window.
+
 ## Other findings
 
 - **Second test video (`Hf20ZzMRs-I`)**: "Rock With You / MORE COWBELL!!!!!! 4pc BAND", channel SERGIO ACEDO, 5:35, no chapters. A single track, not a mix.

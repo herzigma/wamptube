@@ -3,6 +3,14 @@ import Webamp from 'webamp';
 import { invoke } from '@tauri-apps/api/core';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { patchTitleBar } from './titlebar';
+import {
+  handleAddUrlEvent,
+  handleTrackDropEvent,
+  listSource,
+  toWebampTrack,
+  type TrackInfo,
+  type WebampTrack,
+} from './addsource';
 
 /**
  * Whole-UI scale factor (1 or 2). Webamp lays out at 1x (275x348) and #webamp
@@ -12,18 +20,15 @@ import { patchTitleBar } from './titlebar';
 const UI_SCALE = 2;
 document.documentElement.style.setProperty('--ui-scale', String(UI_SCALE));
 
-type ResolvedAudio = {
-  proxy_url: string;
-  title: string;
-  channel: string | null;
-  codec: string;
-  bitrate_kbps: number | null;
-  sample_rate_hz: number | null;
-  duration_s: number;
-  expires_at: number;
+type StartupTracks = {
+  config_path: string;
+  source_count: number;
+  tracks: TrackInfo[];
+  errors: string[];
 };
 
-const VIDEO_IDS = ['u1MqeDGBo94', 'Hf20ZzMRs-I', 'dkrpqUyiZgA'];
+/** Fixed tracks for VITE_SELFTEST runs, so the checks don't depend on the user's config. */
+const TEST_VIDEO_IDS = ['u1MqeDGBo94', 'Hf20ZzMRs-I', 'dkrpqUyiZgA'];
 
 const statusEl = document.getElementById('status')!;
 function setStatus(lines: { text: string; err?: boolean }[]) {
@@ -37,9 +42,30 @@ function setStatus(lines: { text: string; err?: boolean }[]) {
   );
 }
 
-async function resolve(videoId: string): Promise<ResolvedAudio> {
-  // async wrapper so a synchronous throw (no Tauri) becomes a rejection
-  return await invoke<ResolvedAudio>('resolve_audio', { videoId });
+type Line = { text: string; err?: boolean };
+
+/** Tracks from the config file, or the test ids under VITE_SELFTEST. */
+async function loadTracks(): Promise<{ tracks: WebampTrack[]; lines: Line[] }> {
+  const lines: Line[] = [];
+  if (import.meta.env.VITE_SELFTEST) {
+    const results = await Promise.allSettled(TEST_VIDEO_IDS.map(listSource));
+    const tracks: WebampTrack[] = [];
+    results.forEach((r, i) => {
+      if (r.status === 'fulfilled') tracks.push(...r.value.tracks.map(toWebampTrack));
+      else lines.push({ text: `${TEST_VIDEO_IDS[i]}: ${errMsg(r.reason)}`, err: true });
+    });
+    return { tracks, lines };
+  }
+  const s = await invoke<StartupTracks>('startup_tracks');
+  console.warn(`[config] ${s.config_path}: ${s.source_count} sources, ${s.tracks.length} tracks`);
+  for (const e of s.errors) {
+    console.error('[config]', e);
+    lines.push({ text: e, err: true });
+  }
+  if (s.source_count === 0) {
+    lines.push({ text: `No sources yet. Use the playlist's ADD > URL, or edit ${s.config_path}` });
+  }
+  return { tracks: s.tracks.map(toWebampTrack), lines };
 }
 
 function errMsg(e: unknown): string {
@@ -83,35 +109,21 @@ function logAudioErrors() {
 
 async function main() {
   logAudioErrors();
-  setStatus([{ text: 'resolving…' }]);
+  setStatus([{ text: 'loading playlist…' }]);
 
-  const results = await Promise.allSettled(VIDEO_IDS.map(resolve));
-  const tracks: {
-    metaData: { artist: string; title: string };
-    url: string;
-    duration: number;
-  }[] = [];
-  const lines: { text: string; err?: boolean }[] = [];
-
-  results.forEach((r, i) => {
-    const id = VIDEO_IDS[i];
-    if (r.status === 'fulfilled') {
-      const a = r.value;
-      console.log(
-        `[track ${id}] codec=${a.codec} bitrate_kbps=${a.bitrate_kbps} sample_rate_hz=${a.sample_rate_hz} duration_s=${a.duration_s} title=${a.title}`,
-      );
-      tracks.push({
-        metaData: { artist: a.channel ?? '', title: a.title },
-        url: a.proxy_url,
-        duration: a.duration_s,
-      });
-    } else {
-      const m = errMsg(r.reason);
-      console.error(`[resolve failed ${id}]`, r.reason);
-      lines.push({ text: `${id}: ${m}`, err: true });
-    }
-  });
+  const { tracks, lines } = await loadTracks().catch((e) => ({
+    tracks: [] as WebampTrack[],
+    lines: [{ text: errMsg(e), err: true }] as Line[],
+  }));
   setStatus(lines);
+
+  // Messages from ADD > URL and link drops; they replace the startup lines.
+  let clearTimer: number | undefined;
+  const notify = (text: string, err?: boolean) => {
+    setStatus([{ text, err }]);
+    clearTimeout(clearTimer);
+    if (!err && !text.endsWith('…')) clearTimer = window.setTimeout(() => setStatus([]), 5000);
+  };
 
   const webamp = new Webamp({
     initialTracks: tracks,
@@ -121,6 +133,8 @@ async function main() {
       playlist: { position: { left: 0, top: 232 }, size: { extraHeight: 0, extraWidth: 0 } },
     },
     enableHotkeys: true,
+    handleAddUrlEvent: handleAddUrlEvent(notify),
+    handleTrackDropEvent: handleTrackDropEvent(notify),
   });
 
   const inTauri = '__TAURI_INTERNALS__' in window;
@@ -217,7 +231,12 @@ async function selfTest(webamp: Webamp, count: number) {
   for (let i = 0; i < count; i++) {
     webamp.setCurrentTrack(i);
     webamp.play();
-    await sleep(12000); // includes the wait for a fresh URL to become available
+    // First play resolves the video (~3 s) and waits for the fresh URL to become
+    // available (~6 s); wait for the element to have data, then a little more.
+    for (let w = 0; w < 30 && !((lastAudio?.readyState ?? 0) >= 3 && (lastAudio?.currentTime ?? 0) > 0); w++) {
+      await sleep(1000);
+    }
+    await sleep(2000);
     const t1 = report(`track ${i} after play`);
     await sleep(3000);
     const t2 = report(`track ${i} +3s`);

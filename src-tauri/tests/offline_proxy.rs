@@ -105,6 +105,17 @@ async fn ranges_cors_and_status_passthrough() {
 
     assert_eq!(c.get(px.url_for("deadbeef")).send().await.unwrap().status(), 404);
 
+    // /v/{video_id} serves an already-registered video without running yt-dlp.
+    let vurl = px.video_url("u1MqeDGBo94");
+    let r = c.get(&vurl).header("Range", "bytes=10-19").send().await.unwrap();
+    assert_eq!(r.status(), 206);
+    assert_eq!(r.headers()["access-control-allow-origin"], "*");
+    assert_eq!(r.bytes().await.unwrap(), d[10..20]);
+    let r = c.get(format!("http://127.0.0.1:{}/v/bad;id", px.port)).send().await.unwrap();
+    assert_eq!(r.status(), 404, "invalid ids never reach yt-dlp");
+    let r = c.request(reqwest::Method::OPTIONS, px.video_url("zzzzzzzzzzz")).send().await.unwrap();
+    assert_eq!(r.status(), 204, "preflight needs no resolve");
+
     let token = url.rsplit('/').next().unwrap();
     px.set_upstream(token, format!("http://127.0.0.1:{up_port}/gone"), None).await;
     let r = c.get(&url).header("Range", "bytes=0-1").send().await.unwrap();

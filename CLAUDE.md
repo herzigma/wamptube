@@ -3,8 +3,9 @@
 A lightweight macOS desktop audio player for music on regular YouTube videos, with a classic
 Winamp 2 interface (Webamp) inside a Tauri 2 shell. Personal-use tool, not distributed.
 
-This repo is at the **prototype milestone**: Webamp in Tauri plays three hardcoded test videos
-through a loopback proxy. There is no library, database, tagging, Discover window or enrichment yet.
+This repo is at the **prototype milestone**: Webamp in Tauri plays YouTube playlists and videos
+listed in a config file through a loopback proxy. There is no library, database, tagging, Discover
+window or enrichment yet.
 `NOTES.md` is the record of what the prototype found, including open problems; read it before
 changing playback code, and update it when a finding changes.
 
@@ -27,11 +28,19 @@ by `deno task tauri`; there is no global `cargo tauri`. `tauri.conf.json`'s `bef
 `beforeBuildCommand` call `deno task` too. Add packages with `deno add npm:<name>` (or
 `-D` for dev), not npm.
 
+Config: `$XDG_CONFIG_HOME/wamptube/config.toml`, else `~/.config/wamptube/config.toml` (not
+`~/Library/Application Support`, on purpose). It holds `sources = [ ... ]`: playlist or video URLs,
+loaded in order at startup. A missing file is created as a commented template. ADD > URL in the
+playlist window, or dropping a YouTube link on it, appends to `sources` (comments are kept).
+Playlists must be Public or Unlisted: yt-dlp runs signed out.
+
 Environment switches:
 
 - `WAMPTUBE_YTDLP=/path/to/yt-dlp` – use a specific yt-dlp build instead of the one on PATH.
-- `VITE_SELFTEST=1` – on launch, play each track quietly, deep-seek, pause and resume, logging `[selftest]` lines.
-- `VITE_SELFTEST=timeline` – seek track 1 to fixed times and log the audio element's timeline.
+- `VITE_SELFTEST=1` – ignore the config and load the three test videos (`TEST_VIDEO_IDS` in
+  `main.ts`), then play each quietly, deep-seek, pause and resume, logging `[selftest]` lines.
+  This is the end-to-end check.
+- `VITE_SELFTEST=timeline` – same test videos; seek track 1 to fixed times and log the audio element's timeline.
 
 In `tauri dev`, the webview's `console.warn` and `console.error` are forwarded to the terminal;
 `console.log` is not. Rust logs `[proxy]`, `[resolve]` and `[yt-dlp]` lines to stderr. This is the
@@ -48,26 +57,37 @@ sandbox, which is why we don't point yt-dlp at another runtime). ffmpeg is not u
 
 Two halves. The webview draws the UI and never contacts YouTube; the Rust core owns everything else.
 
-- `src/main.ts` – resolves the hardcoded video ids via the `resolve_audio` command, builds Webamp
-  tracks, positions the three Webamp windows with `windowLayout`, wires window dragging /
+- `src/main.ts` – loads tracks via `startup_tracks` (or the test ids under `VITE_SELFTEST`), builds
+  Webamp, positions the three Webamp windows with `windowLayout`, wires window dragging /
   close / minimize to Tauri, and holds the self-test code.
+- `src/addsource.ts` – Webamp's `handleAddUrlEvent` (ADD > URL, with a small input box) and
+  `handleTrackDropEvent` (dropped links). Both call `list_source`, then `save_source`. Dropping
+  works because `dragDropEnabled` is off in `tauri.conf.json`; Tauri would otherwise swallow the drop.
 - `src/titlebar.ts` – redraws the default skin's title-bar sprites at runtime so they read
   WAMPTUBE instead of WINAMP. Default skin only; it skips with a warning if the sprite layout
   doesn't match.
 - `src/style.css` – layout and the UI scale. `UI_SCALE` in `main.ts` drives a `--ui-scale` CSS
   variable applied as `transform: scale()` on `#webamp`.
-- `src-tauri/src/resolve.rs` – runs yt-dlp as a child process (no shell, validated id, 20 s
-  timeout) and parses its JSON.
+- `src-tauri/src/resolve.rs` – runs yt-dlp as a child process (no shell, validated ids, timeouts)
+  and parses its JSON. `parse_source` turns pasted input into a playlist or video id and accepts
+  YouTube hosts only, so arbitrary URLs never reach yt-dlp. `list` is `-J --flat-playlist`: one
+  request per playlist, no stream URLs.
+- `src-tauri/src/config.rs` – finds, reads and appends to `config.toml` (toml_edit, keeps comments).
 - `src-tauri/src/proxy.rs` – axum server on `127.0.0.1:<random port>`. Serves
-  `GET|HEAD /stream/{token}` with CORS and Range support so Webamp's Web Audio graph can use it.
-- `src-tauri/src/lib.rs` – Tauri setup, starts the proxy, registers the command.
+  `GET|HEAD /stream/{token}` and `/v/{video_id}` with CORS and Range support so Webamp's Web Audio
+  graph can use it. `/v/` resolves the video with yt-dlp on its first request (in a detached task,
+  one at a time, failures cached 30 s), which is how a 56-track playlist loads without 56 resolves.
+- `src-tauri/src/lib.rs` – Tauri setup, starts the proxy, registers the commands.
 
 ### Contract between the halves
 
-`invoke('resolve_audio', { videoId })` returns, or rejects with a string:
+All commands reject with a string. `TrackInfo` is
+`{ video_id, title, channel, duration_s, stream_url }`, where `stream_url` is a lazy `/v/` URL.
 
 ```
-{ proxy_url, title, channel, codec, bitrate_kbps, sample_rate_hz, duration_s, expires_at }
+invoke('startup_tracks')            -> { config_path, source_count, tracks: TrackInfo[], errors: string[] }
+invoke('list_source', { source })   -> { source /* canonical URL */, tracks: TrackInfo[] }
+invoke('save_source', { source })   -> boolean  /* false if already in the config */
 ```
 
 Keys are snake_case on purpose. Change both sides together.
@@ -89,6 +109,9 @@ Keys are snake_case on purpose. Change both sides together.
   only (resolves fail without Tauri, by design). Verify behaviour in the real app.
 - **CSP is explicit** in `tauri.conf.json`. Audio comes from `http://127.0.0.1:*`; skin images are
   `data:` URLs. Milkdrop would need `'unsafe-eval'`, which is not enabled.
+- **Every Webamp track needs a `duration`.** Without one Webamp fetches the URL to measure it,
+  which through `/v/` would resolve every track in the playlist at startup. Webamp still buffers
+  track 1 at launch, so that one is resolved straight away.
 - **Known open problem:** WKWebView reports double the real duration for YouTube's DASH m4a.
   See NOTES.md before touching seek or time display.
 
@@ -100,7 +123,8 @@ Keys are snake_case on purpose. Change both sides together.
   to YouTube.
 - Optional enrichment (Gemini, MusicBrainz) must fail soft; the player works without it.
 - Ship Webamp's default skin only. No bundled third-party skins or downloaded art.
-- Keep request rates modest: resolve just before playback, don't bulk re-resolve.
+- Keep request rates modest: resolve just before playback, don't bulk re-resolve. Startup costs one
+  flat listing per configured source.
 
 ## Roadmap
 

@@ -48,13 +48,30 @@ pub struct StreamEntry {
 pub struct ProxyState {
     pub port: u16,
     tokens: RwLock<HashMap<String, StreamEntry>>,
+    /// video id -> token, for `/v/{video_id}` URLs that resolve on first use.
+    by_video: RwLock<HashMap<String, String>>,
+    /// Recent lazy-resolve failures (unix time, message), so a webview that
+    /// retries a dead video doesn't run yt-dlp on every request.
+    failed: RwLock<HashMap<String, (i64, String)>>,
+    /// Serialises lazy resolves: the webview often sends several requests for
+    /// the same new track at once, and they must share one yt-dlp run.
+    resolve_lock: tokio::sync::Mutex<()>,
     client: reqwest::Client,
 }
 
 impl ProxyState {
     /// Register a resolved track and return its loopback URL.
     pub async fn register(&self, track: &ResolvedTrack) -> String {
+        let token = self.insert(track).await;
+        self.url_for(&token)
+    }
+
+    async fn insert(&self, track: &ResolvedTrack) -> String {
         let token = format!("{}{}", uuid::Uuid::new_v4().simple(), uuid::Uuid::new_v4().simple());
+        self.by_video
+            .write()
+            .await
+            .insert(track.video_id.clone(), token.clone());
         self.tokens.write().await.insert(
             token.clone(),
             StreamEntry {
@@ -66,11 +83,63 @@ impl ProxyState {
                 last_reresolve: None,
             },
         );
-        self.url_for(&token)
+        token
     }
 
     pub fn url_for(&self, token: &str) -> String {
         format!("http://127.0.0.1:{}/stream/{token}", self.port)
+    }
+
+    /// Loopback URL for a video that is resolved only when first requested.
+    /// Assumes `video_id` is valid (the handler checks again).
+    pub fn video_url(&self, video_id: &str) -> String {
+        format!("http://127.0.0.1:{}/v/{video_id}", self.port)
+    }
+
+    /// The token serving `video_id`, running yt-dlp if there is none yet.
+    /// The resolve runs in its own task: WebKit often cancels the first request
+    /// for a new track and retries, and the yt-dlp run must survive that rather
+    /// than be killed and started over.
+    async fn token_for_video(self: &Arc<Self>, video_id: &str) -> Result<String, String> {
+        if let Some(t) = self.by_video.read().await.get(video_id) {
+            return Ok(t.clone());
+        }
+        let (st, id) = (self.clone(), video_id.to_string());
+        tokio::spawn(async move { st.resolve_video(&id).await })
+            .await
+            .map_err(|e| format!("resolve task failed: {e}"))?
+    }
+
+    async fn resolve_video(&self, video_id: &str) -> Result<String, String> {
+        if let Some(t) = self.by_video.read().await.get(video_id) {
+            return Ok(t.clone());
+        }
+        let _guard = self.resolve_lock.lock().await;
+        if let Some(t) = self.by_video.read().await.get(video_id) {
+            return Ok(t.clone()); // resolved while we waited
+        }
+        if let Some((at, msg)) = self.failed.read().await.get(video_id) {
+            if now_s() - at < RERESOLVE_MIN_GAP_S {
+                return Err(msg.clone());
+            }
+        }
+        eprintln!("[proxy] resolving {video_id} on first request");
+        match resolve::resolve(video_id).await {
+            Ok(track) => {
+                self.failed.write().await.remove(video_id);
+                let token = self.insert(&track).await;
+                eprintln!(
+                    "[resolve] {video_id} -> {} | {} {:?}kbps {:?}Hz {}s | token {}",
+                    track.title, track.codec, track.bitrate_kbps, track.sample_rate_hz, track.duration_s,
+                    short(&token)
+                );
+                Ok(token)
+            }
+            Err(e) => {
+                self.failed.write().await.insert(video_id.to_string(), (now_s(), e.clone()));
+                Err(e)
+            }
+        }
     }
 
     /// Replace a token's upstream URL (used after re-resolving; also handy in tests).
@@ -103,10 +172,14 @@ pub async fn start() -> std::io::Result<Arc<ProxyState>> {
     let state = Arc::new(ProxyState {
         port,
         tokens: RwLock::new(HashMap::new()),
+        by_video: RwLock::new(HashMap::new()),
+        failed: RwLock::new(HashMap::new()),
+        resolve_lock: tokio::sync::Mutex::new(()),
         client,
     });
     let app = Router::new()
         .route("/stream/{token}", any(stream_handler))
+        .route("/v/{video_id}", any(video_handler))
         .with_state(state.clone());
     tokio::spawn(async move {
         if let Err(e) = axum::serve(listener, app).await {
@@ -260,6 +333,34 @@ async fn stream_handler(
     method: Method,
     req_headers: HeaderMap,
 ) -> Response {
+    serve(st, token, method, req_headers).await
+}
+
+/// `/v/{video_id}`: like `/stream/{token}`, but resolves the video with yt-dlp
+/// on its first request, so a playlist can hold many tracks without resolving
+/// any of them up front.
+async fn video_handler(
+    State(st): State<Arc<ProxyState>>,
+    Path(video_id): Path<String>,
+    method: Method,
+    req_headers: HeaderMap,
+) -> Response {
+    if method == Method::OPTIONS {
+        return serve(st, video_id, method, req_headers).await;
+    }
+    if !resolve::is_valid_video_id(&video_id) {
+        return simple(StatusCode::NOT_FOUND, "invalid video id");
+    }
+    match st.token_for_video(&video_id).await {
+        Ok(token) => serve(st, token, method, req_headers).await,
+        Err(e) => {
+            eprintln!("[proxy] {method} /v/{video_id} -> 502 resolve failed: {e}");
+            simple(StatusCode::BAD_GATEWAY, "could not resolve video")
+        }
+    }
+}
+
+async fn serve(st: Arc<ProxyState>, token: String, method: Method, req_headers: HeaderMap) -> Response {
     if method == Method::OPTIONS {
         let mut r = simple(StatusCode::NO_CONTENT, "");
         let h = r.headers_mut();

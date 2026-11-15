@@ -1,3 +1,4 @@
+pub mod config;
 pub mod proxy;
 pub mod resolve;
 
@@ -42,12 +43,101 @@ pub async fn resolve_and_register(
     })
 }
 
+/// One playlist row for the front end. `stream_url` is a lazy proxy URL:
+/// nothing is resolved until the webview requests it. Keys are snake_case.
+#[derive(Debug, Clone, Serialize)]
+pub struct TrackInfo {
+    pub video_id: String,
+    pub title: String,
+    pub channel: Option<String>,
+    pub duration_s: u32,
+    pub stream_url: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct StartupTracks {
+    pub config_path: String,
+    pub source_count: usize,
+    pub tracks: Vec<TrackInfo>,
+    /// One message per source that could not be listed (or a config error).
+    pub errors: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ListedSource {
+    /// Canonical URL, as stored in the config file.
+    pub source: String,
+    pub tracks: Vec<TrackInfo>,
+}
+
+fn track_infos(proxy: &proxy::ProxyState, entries: Vec<resolve::Entry>) -> Vec<TrackInfo> {
+    entries
+        .into_iter()
+        .map(|e| TrackInfo {
+            stream_url: proxy.video_url(&e.video_id),
+            video_id: e.video_id,
+            title: e.title,
+            channel: e.channel,
+            duration_s: e.duration_s,
+        })
+        .collect()
+}
+
+/// Parse and list one source (playlist or video) without resolving streams.
+pub async fn list_and_wrap(proxy: &proxy::ProxyState, source: &str) -> Result<ListedSource, String> {
+    let src = resolve::parse_source(source)?;
+    let entries = resolve::list(&src).await?;
+    Ok(ListedSource { source: src.canonical_url(), tracks: track_infos(proxy, entries) })
+}
+
+fn config_path() -> Result<std::path::PathBuf, String> {
+    config::path().ok_or_else(|| "cannot locate config dir: HOME is not set".to_string())
+}
+
+/// Everything in the config file, in order. Sources are listed one at a time.
 #[tauri::command]
-async fn resolve_audio(
-    video_id: String,
+async fn startup_tracks(proxy: tauri::State<'_, Arc<proxy::ProxyState>>) -> Result<StartupTracks, String> {
+    let p = config_path()?;
+    let mut out = StartupTracks {
+        config_path: p.display().to_string(),
+        source_count: 0,
+        tracks: vec![],
+        errors: vec![],
+    };
+    let sources = match config::load(&p) {
+        Ok(s) => s,
+        Err(e) => {
+            out.errors.push(format!("config: {e}"));
+            return Ok(out);
+        }
+    };
+    out.source_count = sources.len();
+    for s in sources {
+        match list_and_wrap(&proxy, &s).await {
+            Ok(l) => out.tracks.extend(l.tracks),
+            Err(e) => {
+                eprintln!("[config] {s}: {e}");
+                out.errors.push(format!("{s}: {e}"));
+            }
+        }
+    }
+    Ok(out)
+}
+
+/// List a pasted or dropped playlist/video URL (or id).
+#[tauri::command]
+async fn list_source(
+    source: String,
     proxy: tauri::State<'_, Arc<proxy::ProxyState>>,
-) -> Result<ResolvedAudio, String> {
-    resolve_and_register(&proxy, &video_id).await
+) -> Result<ListedSource, String> {
+    list_and_wrap(&proxy, &source).await
+}
+
+/// Append a source to the config file. Returns false if it was already there.
+#[tauri::command]
+async fn save_source(source: String) -> Result<bool, String> {
+    let canonical = resolve::parse_source(&source)?.canonical_url();
+    config::add_source(&config_path()?, &canonical)
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -58,7 +148,7 @@ pub fn run() {
             app.manage(proxy);
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![resolve_audio])
+        .invoke_handler(tauri::generate_handler![startup_tracks, list_source, save_source])
         .run(tauri::generate_context!())
         .expect("error while running wamptube");
 }
