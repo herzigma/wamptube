@@ -28,6 +28,10 @@ by `deno task tauri`; there is no global `cargo tauri`. `tauri.conf.json`'s `bef
 `beforeBuildCommand` call `deno task` too. Add packages with `deno add npm:<name>` (or
 `-D` for dev), not npm.
 
+Release build: `deno task tauri build` makes `src-tauri/target/release/bundle/{macos,dmg}`. CI
+(`.github/workflows/build.yml`) does this on every push to main (Apple Silicon, unsigned) and
+replaces the rolling `latest` GitHub prerelease with the dmg and a zipped .app.
+
 Config: `$XDG_CONFIG_HOME/wamptube/config.toml`, else `~/.config/wamptube/config.toml` (not
 `~/Library/Application Support`, on purpose). It holds `sources = [ ... ]`: playlist or video URLs,
 loaded in order at startup. A missing file is created as a commented template. ADD > URL in the
