@@ -252,7 +252,10 @@ fn is_valid_playlist_id(id: &str) -> bool {
 
 /// Accepts a bare video id, a bare playlist id, or a YouTube / youtu.be /
 /// YouTube Studio URL. Only YouTube hosts are accepted, so arbitrary URLs never
-/// reach yt-dlp. A watch URL that also has `list=` counts as the video.
+/// reach yt-dlp. A watch URL that also has `list=` counts as the playlist
+/// (that is what "copy URL" gives while a playlist is playing), except for
+/// auto-generated Mixes (`RD...`), which are endless and personal: those
+/// count as the video.
 pub fn parse_source(input: &str) -> Result<Source, String> {
     let s = input.trim();
     let bad = || format!("Not a YouTube video or playlist: {s:?}");
@@ -281,6 +284,11 @@ pub fn parse_source(input: &str) -> Result<Source, String> {
         },
         "youtube.com" | "www.youtube.com" | "m.youtube.com" | "music.youtube.com" => {
             if let Some(v) = q("v") {
+                if let Some(l) = q("list") {
+                    if !l.starts_with("RD") && is_valid_playlist_id(&l) {
+                        return Ok(Source::Playlist(l));
+                    }
+                }
                 return video(&v);
             }
             match segs.as_slice() {
@@ -385,7 +393,8 @@ mod tests {
         assert_eq!(p(&format!("https://www.youtube.com/playlist?list={pl}")), Ok(Playlist(pl.into())));
         assert_eq!(p(&format!("youtube.com/playlist?list={pl}")), Ok(Playlist(pl.into())));
         assert_eq!(p(&format!("https://studio.youtube.com/playlist/{pl}/videos")), Ok(Playlist(pl.into())));
-        assert_eq!(p(&format!("https://www.youtube.com/watch?v=Hf20ZzMRs-I&list={pl}")), Ok(Video("Hf20ZzMRs-I".into())));
+        assert_eq!(p(&format!("https://www.youtube.com/watch?v=Hf20ZzMRs-I&list={pl}")), Ok(Playlist(pl.into())));
+        assert_eq!(p("https://www.youtube.com/watch?v=Hf20ZzMRs-I&list=RDHf20ZzMRs-I"), Ok(Video("Hf20ZzMRs-I".into())));
         assert_eq!(p("https://youtu.be/Hf20ZzMRs-I?t=3"), Ok(Video("Hf20ZzMRs-I".into())));
         assert_eq!(p("https://m.youtube.com/shorts/Hf20ZzMRs-I"), Ok(Video("Hf20ZzMRs-I".into())));
         assert!(p("https://evil.example/watch?v=Hf20ZzMRs-I").is_err());
