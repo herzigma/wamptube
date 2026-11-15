@@ -5,11 +5,11 @@ Status of the prototype milestone's acceptance criteria. Last updated 2026-11-15
 ## Run it
 
 ```bash
-npm install
-npm run tauri dev
+deno install
+deno task tauri dev
 ```
 
-The Tauri CLI is the npm-local `@tauri-apps/cli` (no global `cargo install tauri-cli` needed).
+Deno is the only JS runtime: it installs the npm packages from `package.json` (locked in `deno.lock`), runs Vite and the npm-local `@tauri-apps/cli` (no global `cargo install tauri-cli` needed), and is the runtime yt-dlp uses for YouTube's JS challenges. Node is not needed.
 The webview's `console.warn` / `console.error` lines are forwarded into the `tauri dev`
 terminal output (`console.log` is not), alongside `[proxy]` and `[resolve]` lines from the Rust core.
 
@@ -18,14 +18,14 @@ terminal output (`console.log` is not), alongside `[proxy]` and `[resolve]` line
 without touching Homebrew:
 
 ```bash
-WAMPTUBE_YTDLP=/path/to/yt-dlp npm run tauri dev
+WAMPTUBE_YTDLP=/path/to/yt-dlp deno task tauri dev
 ```
 
 Opt-in checks, logged with a `[selftest]` / `[timeline]` prefix:
 
 ```bash
-VITE_SELFTEST=1 npm run tauri dev          # plays each track quietly, deep-seeks, pauses, resumes
-VITE_SELFTEST=timeline npm run tauri dev   # seeks track 1 to fixed times and logs the element's timeline
+VITE_SELFTEST=1 deno task tauri dev          # plays each track quietly, deep-seeks, pauses, resumes
+VITE_SELFTEST=timeline deno task tauri dev   # seeks track 1 to fixed times and logs the element's timeline
 ```
 
 Tests (in `src-tauri/`):
@@ -85,6 +85,13 @@ yt-dlp 2026.10.26 reports `available_at` about 5–6 s after resolve; requests b
 The proxy now waits for it (plus 1 s) before the first upstream request. The boundary is not
 exact: a request just after it can still 403, so within 10 s of `available_at` the proxy retries
 once after 3 s before treating the URL as expired.
+
+This is not always enough. On 2026-11-15, during three self-test runs in about five minutes,
+two runs had a track whose fresh URL kept returning 403 after the retry. The re-resolved URL also
+returned 403, the 30 s re-resolve limit stopped further attempts, and the element errored
+(`play()` AbortError, `readyState=0`). The track that failed differed between runs, and the third
+run passed cleanly. Possibly googlevideo pushing back on repeated resolves of the same ids;
+unconfirmed.
 
 ### 4. googlevideo throttles large ranges
 

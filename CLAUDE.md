@@ -11,10 +11,9 @@ changing playback code, and update it when a finding changes.
 ## Commands
 
 ```bash
-npm install
-npm run tauri dev                 # run the app (Vite on :1420 + cargo run)
-npx tsc --noEmit                  # type-check the front end
-npx vite build                    # front-end production build
+deno install                      # npm packages from package.json into node_modules
+deno task tauri dev               # run the app (Vite on :1420 + cargo run)
+deno task build                   # type-check (tsc --noEmit) + front-end production build
 
 cd src-tauri
 cargo test                        # offline: unit tests + proxy against a fake upstream
@@ -22,7 +21,11 @@ cargo test --test live_proxy -- --ignored --nocapture   # live: real yt-dlp + go
 cargo clippy --all-targets
 ```
 
-The Tauri CLI is the npm-local `@tauri-apps/cli`; there is no global `cargo tauri`.
+Deno is the only JS runtime; there is no Node. Deno reads `package.json` (scripts run via
+`deno task`) and locks with `deno.lock`. The Tauri CLI is the npm-local `@tauri-apps/cli`, run
+by `deno task tauri`; there is no global `cargo tauri`. `tauri.conf.json`'s `beforeDevCommand` /
+`beforeBuildCommand` call `deno task` too. Add packages with `deno add npm:<name>` (or
+`-D` for dev), not npm.
 
 Environment switches:
 
@@ -36,9 +39,10 @@ way to observe the app without looking at the window.
 
 ## Prerequisites
 
-Rust (rustup), Node, and Homebrew `yt-dlp` and `deno`. yt-dlp must be recent: a build a few
-months old can resolve URLs that then refuse to play. Current yt-dlp needs Deno to solve
-YouTube's JS challenges. ffmpeg is not used.
+Rust (rustup), and Homebrew `yt-dlp` and `deno`. yt-dlp must be recent: a build a few
+months old can resolve URLs that then refuse to play. Deno does double duty: it is the front-end
+toolchain, and yt-dlp finds it on PATH at runtime to solve YouTube's JS challenges (in Deno's
+sandbox, which is why we don't point yt-dlp at another runtime). ffmpeg is not used.
 
 ## Architecture
 
