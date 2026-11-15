@@ -1,12 +1,9 @@
 # wamptube
 
 A small Mac app for listening to music from YouTube, with the look and feel of classic
-Winamp 2.
+Winamp 2. You give it YouTube playlists or videos. It plays just the audio in a Winamp-style player.
 
-You give it YouTube playlists or videos. It plays just the audio in a Winamp-style player,
-with a main window, an equalizer and a playlist. No browser tabs, no video, no ads.
-
-It's a personal project at an early stage. Expect rough edges (see [Known issues](#known-issues)).
+<img width="1560" height="2084" alt="CleanShot 2026-11-15 at 13 42 59@2x" src="https://github.com/user-attachments/assets/aed4950b-c4f3-41ef-b58f-4164b170a618" />
 
 ## Download
 
