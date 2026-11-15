@@ -96,7 +96,9 @@ Keys are snake_case on purpose. Change both sides together.
 
 - **Window size and scale are coupled by hand.** The Tauri window (`src-tauri/tauri.conf.json`,
   550x696) must equal 275x348 times `UI_SCALE`. `#app` deliberately stays at 1x size because
-  Webamp centres its windows in the mount node's unscaled box.
+  Webamp centres its windows in the mount node's unscaled box. That size is only the starting
+  size: `installAutoLayout` in `main.ts` restacks the open Webamp windows (main, EQ, playlist)
+  with no gaps and resizes the Tauri window to fit whenever one is closed, shaded or resized.
 - **Scale with `transform`, not CSS `zoom`.** Webamp's sliders compare `getBoundingClientRect()`
   with the mouse position; `zoom` breaks that in WebKit.
 - **The proxy must chunk upstream requests.** googlevideo throttles open-ended or whole-file

@@ -1,7 +1,7 @@
 /// <reference types="vite/client" />
 import Webamp from 'webamp';
 import { invoke } from '@tauri-apps/api/core';
-import { getCurrentWindow } from '@tauri-apps/api/window';
+import { getCurrentWindow, LogicalSize } from '@tauri-apps/api/window';
 import { patchTitleBar } from './titlebar';
 import {
   handleAddUrlEvent,
@@ -93,6 +93,90 @@ function installDragHandler() {
   );
 }
 
+/** Top-to-bottom stacking order of the Webamp windows inside the Tauri window. */
+const STACK = ['main', 'equalizer', 'playlist'] as const;
+
+/**
+ * Pixel size of a Webamp window at 1x, from its store entry. Mirrors Webamp's
+ * own getWPixelSize (webamp 2.3.1): 275x116 plus 25x29 per resize segment,
+ * 14 tall when shaded, doubled for main/EQ in double-size mode.
+ */
+function windowPixelSize(w: any, doubled: boolean) {
+  const [segW, segH] = w.size as [number, number];
+  const k = doubled && w.canDouble ? 2 : 1;
+  return { width: (275 + segW * 25) * k, height: (w.shade ? 14 : 116 + segH * 29) * k };
+}
+
+/**
+ * Keep the open Webamp windows stacked with no gaps and size the Tauri window
+ * to fit them, so closing or shading the EQ or playlist (or resizing the
+ * playlist) doesn't leave an empty black slot. The playlist's width is held
+ * at the main window's, since main and EQ can't be widened. Works from Webamp's store
+ * (`webamp.store`, public in the 2.3.1 typings), not the DOM, because React
+ * renders a store change later than the store notifies us.
+ *
+ * #app is resized to the same 1x box first: on every window resize Webamp
+ * re-checks that its windows fit inside the mount node and shoves them back
+ * in if not, which would fight a growing playlist.
+ */
+function installAutoLayout(webamp: Webamp) {
+  const store = (webamp as any).store as {
+    getState(): any;
+    dispatch(a: unknown): void;
+    subscribe(cb: () => void): () => void;
+  };
+  const app = document.getElementById('app')!;
+  let last = '';
+  let scheduled = false;
+
+  const relayout = () => {
+    scheduled = false;
+    const state = store.getState();
+    const gen = state.windows.genWindows;
+    const doubled = !!state.display.doubled;
+    const moves: Record<string, { x: number; y: number }> = {};
+    let y = 0;
+    let width = 275;
+    // Main and EQ have a fixed width in Winamp, so keep the playlist at that
+    // width too (height stays resizable); a wider playlist would stick out.
+    const pl = gen.playlist;
+    if (pl && pl.size[0] !== 0) {
+      store.dispatch({ type: 'WINDOW_SIZE_CHANGED', windowId: 'playlist', size: [0, pl.size[1]] });
+      return; // the dispatch re-runs relayout
+    }
+    for (const id of STACK) {
+      const w = gen[id];
+      if (!w?.open) continue;
+      const size = windowPixelSize(w, doubled);
+      if (w.position.x !== 0 || w.position.y !== y) moves[id] = { x: 0, y };
+      y += size.height;
+      width = Math.max(width, size.width);
+    }
+    if (y === 0) return;
+    const key = `${width}x${y}`;
+    if (key !== last) {
+      last = key;
+      console.warn(`[layout] ${key} (x${UI_SCALE})`);
+      app.style.width = `${width}px`;
+      app.style.height = `${y}px`;
+      getCurrentWindow()
+        .setSize(new LogicalSize(width * UI_SCALE, y * UI_SCALE))
+        .catch((e) => console.error('setSize failed', e));
+    }
+    if (Object.keys(moves).length) {
+      store.dispatch({ type: 'UPDATE_WINDOW_POSITIONS', positions: moves });
+    }
+  };
+
+  const schedule = () => {
+    if (scheduled) return;
+    scheduled = true;
+    queueMicrotask(relayout);
+  };
+  store.subscribe(schedule);
+  relayout();
+}
+
 function logAudioErrors() {
   const handler = (e: Event) => {
     const t = e.target;
@@ -178,6 +262,7 @@ async function main() {
     return 0;
   });
   if (patched < 6) console.warn(`[titlebar] only ${patched}/6 title sprites patched`);
+  if (inTauri) installAutoLayout(webamp);
 
   if (import.meta.env.VITE_SELFTEST === 'timeline') void timelineProbe(webamp);
   else if (import.meta.env.VITE_SELFTEST) void selfTest(webamp, tracks.length);

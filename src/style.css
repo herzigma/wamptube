@@ -7,8 +7,8 @@
 :root { --ui-scale: 2; --base-w: 275px; --base-h: 348px; }
 html, body {
   margin: 0; padding: 0; overflow: hidden; background: #111;
-  width: calc(var(--base-w) * var(--ui-scale));
-  height: calc(var(--base-h) * var(--ui-scale));
+  /* starting size; the Tauri window (and #app) are resized by installAutoLayout */
+  width: 100%; height: 100%;
 }
 /* Webamp centres its windows inside the mount node's (unscaled) box, so the
    mount node stays at 1x size; the scaled #webamp then fills the window. */
