@@ -33,6 +33,11 @@ html, body {
   transform: scale(var(--ui-scale));
   transform-origin: 0 0;
 }
+/* No text selection in the player: dragging Webamp's resize handle (and other
+   drags) would otherwise sweep a WebKit selection across the playlist. */
+#webamp, #webamp *, #webamp-context-menu, #webamp-context-menu * {
+  -webkit-user-select: none; user-select: none;
+}
 /* nearest-neighbour for every skin sprite / canvas (vis, playlist, EQ graph) */
 #webamp, #webamp *, #webamp canvas, #webamp-context-menu, #webamp-context-menu * {
   image-rendering: pixelated;
