@@ -1,0 +1,65 @@
+name: Build
+
+# Builds the macOS app on every merge (push) to main and publishes it as the
+# rolling "latest" release. Also runnable by hand from the Actions tab.
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write # needed to create the release
+
+concurrency:
+  group: build-main
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: macos-latest # Apple Silicon
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - run: deno install
+
+      - name: Rust tests (offline)
+        working-directory: src-tauri
+        run: cargo test
+
+      # beforeBuildCommand in tauri.conf.json runs `deno task build` (tsc + vite).
+      - name: Build app
+        run: deno task tauri build
+
+      - name: Collect artifacts
+        run: |
+          mkdir -p out
+          cp src-tauri/target/release/bundle/dmg/*.dmg out/
+          # A zipped .app for installing without mounting the dmg.
+          ditto -c -k --keepParent src-tauri/target/release/bundle/macos/wamptube.app out/wamptube-macos-arm64.zip
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wamptube-macos-arm64
+          path: out/*
+          retention-days: 30
+
+      - name: Publish rolling "latest" release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release delete latest --cleanup-tag --yes || true
+          gh release create latest out/* \
+            --target "$GITHUB_SHA" \
+            --prerelease \
+            --title "Latest build (${GITHUB_SHA::7})" \
+            --notes "Unsigned macOS (Apple Silicon) build of ${GITHUB_SHA}. Needs yt-dlp and deno installed (brew install yt-dlp deno). First launch: right-click > Open, or run: xattr -dr com.apple.quarantine /Applications/wamptube.app"
