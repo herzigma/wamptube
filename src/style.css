@@ -1,0 +1,49 @@
+/*
+ * --ui-scale is set from UI_SCALE in src/main.ts (default 2 here so the first
+ * paint already has the right size). Webamp itself lays out at 1x (275x348);
+ * #webamp is scaled as a whole with a transform so all three windows
+ * (main, EQ, playlist) scale together and hit-testing stays exact.
+ */
+:root { --ui-scale: 2; --base-w: 275px; --base-h: 348px; }
+html, body {
+  margin: 0; padding: 0; overflow: hidden; background: #111;
+  width: calc(var(--base-w) * var(--ui-scale));
+  height: calc(var(--base-h) * var(--ui-scale));
+}
+/* Webamp centres its windows inside the mount node's (unscaled) box, so the
+   mount node stays at 1x size; the scaled #webamp then fills the window. */
+#app {
+  position: absolute; left: 0; top: 0; overflow: hidden;
+  width: var(--base-w); height: var(--base-h);
+}
+
+/*
+ * transform (not CSS `zoom`): getBoundingClientRect and mouse clientX/Y agree
+ * under transforms in both WebKit and Chromium, whereas WebKit's `zoom`
+ * reports element rects in unzoomed coordinates, which would break Webamp's
+ * VerticalSlider (EQ) and other rect-vs-pointer maths.
+ */
+#webamp {
+  transform: scale(var(--ui-scale));
+  transform-origin: 0 0;
+}
+/* Context menus are portalled to <body>, outside #webamp; the portal's inner
+   div is placed at the (already scaled) click point, so scale around it. */
+#webamp-context-menu > div {
+  transform: scale(var(--ui-scale));
+  transform-origin: 0 0;
+}
+/* nearest-neighbour for every skin sprite / canvas (vis, playlist, EQ graph) */
+#webamp, #webamp *, #webamp canvas, #webamp-context-menu, #webamp-context-menu * {
+  image-rendering: pixelated;
+}
+
+#status {
+  position: fixed; left: 0; bottom: 0; z-index: 99999;
+  max-width: calc(var(--base-w) * var(--ui-scale));
+  box-sizing: border-box;
+  font: calc(9px * var(--ui-scale)) / 1.2 monospace; color: #9f9; background: rgba(0,0,0,.7);
+  padding: calc(1px * var(--ui-scale)) calc(3px * var(--ui-scale));
+  pointer-events: none; white-space: pre-wrap; overflow-wrap: anywhere;
+}
+#status .err { color: #f88; }

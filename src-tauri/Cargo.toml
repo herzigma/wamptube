@@ -1,0 +1,22 @@
+[package]
+name = "wamptube"
+version = "0.1.0"
+edition = "2021"
+description = "Winamp-style YouTube audio player prototype"
+
+[lib]
+name = "wamptube_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2.7.4", features = [] }
+
+[dependencies]
+axum = "0.8.9"
+reqwest = { version = "0.13.5", features = ["stream"] }
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.154"
+tauri = { version = "2.12.5", features = [] }
+tokio-stream = "0.1"
+tokio = { version = "1.54.1", features = ["full"] }
+uuid = { version = "1.29.2", features = ["v4"] }
