@@ -17,7 +17,7 @@ import {
  * is scaled with a CSS transform (see style.css). The Tauri window size in
  * src-tauri/tauri.conf.json must be 275*UI_SCALE x 348*UI_SCALE.
  */
-const UI_SCALE = 2;
+const UI_SCALE: number = 2;
 document.documentElement.style.setProperty('--ui-scale', String(UI_SCALE));
 
 type StartupTracks = {
@@ -108,16 +108,63 @@ function windowPixelSize(w: any, doubled: boolean) {
 }
 
 /**
+ * Where the open windows go when stacked top to bottom with no gaps, and the
+ * 1x box they fill.
+ */
+function stackLayout(state: any) {
+  const gen = state.windows.genWindows;
+  const doubled = !!state.display.doubled;
+  const moves: Record<string, { x: number; y: number }> = {};
+  let height = 0;
+  let width = 275;
+  for (const id of STACK) {
+    const w = gen[id];
+    if (!w?.open) continue;
+    const size = windowPixelSize(w, doubled);
+    if (w.position.x !== 0 || w.position.y !== height) moves[id] = { x: 0, y: height };
+    height += size.height;
+    width = Math.max(width, size.width);
+  }
+  return { width, height, moves };
+}
+
+let fittedKey = '';
+/**
+ * Size #app (1x) and the Tauri window (scaled) to a stack of the given size.
+ * #app has to match: on every window resize Webamp re-checks that its windows
+ * fit inside the mount node and shoves them back in if not.
+ */
+function fitWindow(width: number, height: number): Promise<void> {
+  const key = `${width}x${height}`;
+  if (key === fittedKey) return Promise.resolve();
+  fittedKey = key;
+  console.warn(`[layout] ${key} (x${UI_SCALE})`);
+  const app = document.getElementById('app')!;
+  app.style.width = `${width}px`;
+  app.style.height = `${height}px`;
+  return getCurrentWindow()
+    .setSize(new LogicalSize(width * UI_SCALE, height * UI_SCALE))
+    .catch((e) => console.error('setSize failed', e));
+}
+
+/**
+ * Redux middleware for Webamp's `__customMiddlewares` option: hold the
+ * playlist's width at the main window's when its resize handle is dragged,
+ * since main and EQ can't be widened. Only its height changes.
+ */
+const resizeMiddleware = () => (next: (a: any) => any) => (action: any) => {
+  if (action?.type === 'WINDOW_SIZE_CHANGED' && action.windowId === 'playlist') {
+    action = { ...action, size: [0, action.size[1]] };
+  }
+  return next(action);
+};
+
+/**
  * Keep the open Webamp windows stacked with no gaps and size the Tauri window
  * to fit them, so closing or shading the EQ or playlist (or resizing the
- * playlist) doesn't leave an empty black slot. The playlist's width is held
- * at the main window's, since main and EQ can't be widened. Works from Webamp's store
+ * playlist) doesn't leave an empty black slot. Works from Webamp's store
  * (`webamp.store`, public in the 2.3.1 typings), not the DOM, because React
  * renders a store change later than the store notifies us.
- *
- * #app is resized to the same 1x box first: on every window resize Webamp
- * re-checks that its windows fit inside the mount node and shoves them back
- * in if not, which would fight a growing playlist.
  */
 function installAutoLayout(webamp: Webamp) {
   const store = (webamp as any).store as {
@@ -125,44 +172,13 @@ function installAutoLayout(webamp: Webamp) {
     dispatch(a: unknown): void;
     subscribe(cb: () => void): () => void;
   };
-  const app = document.getElementById('app')!;
-  let last = '';
   let scheduled = false;
 
   const relayout = () => {
     scheduled = false;
-    const state = store.getState();
-    const gen = state.windows.genWindows;
-    const doubled = !!state.display.doubled;
-    const moves: Record<string, { x: number; y: number }> = {};
-    let y = 0;
-    let width = 275;
-    // Main and EQ have a fixed width in Winamp, so keep the playlist at that
-    // width too (height stays resizable); a wider playlist would stick out.
-    const pl = gen.playlist;
-    if (pl && pl.size[0] !== 0) {
-      store.dispatch({ type: 'WINDOW_SIZE_CHANGED', windowId: 'playlist', size: [0, pl.size[1]] });
-      return; // the dispatch re-runs relayout
-    }
-    for (const id of STACK) {
-      const w = gen[id];
-      if (!w?.open) continue;
-      const size = windowPixelSize(w, doubled);
-      if (w.position.x !== 0 || w.position.y !== y) moves[id] = { x: 0, y };
-      y += size.height;
-      width = Math.max(width, size.width);
-    }
-    if (y === 0) return;
-    const key = `${width}x${y}`;
-    if (key !== last) {
-      last = key;
-      console.warn(`[layout] ${key} (x${UI_SCALE})`);
-      app.style.width = `${width}px`;
-      app.style.height = `${y}px`;
-      getCurrentWindow()
-        .setSize(new LogicalSize(width * UI_SCALE, y * UI_SCALE))
-        .catch((e) => console.error('setSize failed', e));
-    }
+    const { width, height, moves } = stackLayout(store.getState());
+    if (height === 0) return;
+    void fitWindow(width, height);
     if (Object.keys(moves).length) {
       store.dispatch({ type: 'UPDATE_WINDOW_POSITIONS', positions: moves });
     }
@@ -175,6 +191,45 @@ function installAutoLayout(webamp: Webamp) {
   };
   store.subscribe(schedule);
   relayout();
+}
+
+/**
+ * Webamp's resize handles turn raw clientX/Y deltas into 25x29 px steps, but
+ * #webamp is drawn UI_SCALE times larger, so the window would grow faster than
+ * the pointer moves. While a resize handle is held, swap each mousemove for one
+ * whose offset from the press point is divided by UI_SCALE.
+ */
+function installResizeScaling() {
+  if (UI_SCALE === 1) return;
+  const ours = new WeakSet<Event>();
+  let start: { x: number; y: number } | null = null;
+  window.addEventListener(
+    'mousedown',
+    (e) => {
+      const t = e.target as HTMLElement | null;
+      if (e.button === 0 && t?.closest('#playlist-resize-target, #gen-resize-target')) {
+        start = { x: e.clientX, y: e.clientY };
+      }
+    },
+    true,
+  );
+  window.addEventListener('mouseup', () => (start = null), true);
+  window.addEventListener(
+    'mousemove',
+    (e) => {
+      if (!start || ours.has(e)) return;
+      e.stopImmediatePropagation();
+      const scaled = new MouseEvent('mousemove', {
+        bubbles: true,
+        clientX: start.x + (e.clientX - start.x) / UI_SCALE,
+        clientY: start.y + (e.clientY - start.y) / UI_SCALE,
+        buttons: e.buttons,
+      });
+      ours.add(scaled);
+      window.dispatchEvent(scaled);
+    },
+    true,
+  );
 }
 
 function logAudioErrors() {
@@ -219,7 +274,9 @@ async function main() {
     enableHotkeys: true,
     handleAddUrlEvent: handleAddUrlEvent(notify),
     handleTrackDropEvent: handleTrackDropEvent(notify),
-  });
+    // private option in webamp 2.3.1; see resizeMiddleware
+    __customMiddlewares: [resizeMiddleware],
+  } as any);
 
   const inTauri = '__TAURI_INTERNALS__' in window;
   if (inTauri) {
@@ -263,6 +320,7 @@ async function main() {
   });
   if (patched < 6) console.warn(`[titlebar] only ${patched}/6 title sprites patched`);
   if (inTauri) installAutoLayout(webamp);
+  installResizeScaling();
 
   if (import.meta.env.VITE_SELFTEST === 'timeline') void timelineProbe(webamp);
   else if (import.meta.env.VITE_SELFTEST) void selfTest(webamp, tracks.length);
