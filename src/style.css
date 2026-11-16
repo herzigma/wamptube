@@ -74,10 +74,17 @@ html, body {
 }
 
 /* Video window (src/videowindow.ts): the skin's gen-window classes draw the frame. */
-#webamp .gen-window.video-window { position: absolute; top: 0; width: 467px; height: 286px; }
+#webamp .gen-window.video-window { position: absolute; top: 0; }
 #webamp .video-window .gen-top, #webamp .video-window .gen-bottom { flex-shrink: 0; }
 #webamp .video-window .gen-middle { min-height: 0; }
 #webamp .video-window .gen-middle-center { background: #000; }
 #webamp .video-window #video-close { position: absolute; inset: 0; }
 #video-pane { position: absolute; inset: 0; width: 100%; height: 100%; background: #000; object-fit: contain; }
 #webamp .video-window #video-pane { image-rendering: auto; }
+
+/* While the video window is open its bottom-right grip is the resize handle: the
+   playlist's own grip stops working, and its art is removed by swapping in a copy
+   of the sprite with the grip painted out (src/videowindow.ts, refreshGriplessSprite). */
+#webamp.video-active #playlist-window #playlist-resize-target { pointer-events: none; }
+#webamp.video-active.grip-patched .playlist-bottom-right { background-image: var(--playlist-bottom-right); }
+#webamp .video-window .video-resize { position: absolute; right: 0; bottom: 0; width: 20px; height: 20px; cursor: nwse-resize; }

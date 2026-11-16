@@ -5,7 +5,17 @@ if (import.meta.env.VITE_SPIKE) location.replace('/spike.html');
 import { invoke } from '@tauri-apps/api/core';
 import { getCurrentWindow, LogicalSize } from '@tauri-apps/api/window';
 import { MseMedia, videoEl } from './msemedia';
-import { FRAME_H, FRAME_W, isVideoOpen, mountVideoWindow, placeVideoWindow } from './videowindow';
+import {
+  VIDEO_STACK_FLOOR,
+  frameSize,
+  getFrameWidth,
+  isVideoOpen,
+  mountVideoWindow,
+  onVideoResize,
+  placeVideoWindow,
+  refreshGriplessSprite,
+  setFrameWidth,
+} from './videowindow';
 import {
   handleAddUrlEvent,
   handleTrackDropEvent,
@@ -131,6 +141,9 @@ function stackLayout(state: any) {
   return { width, height, moves };
 }
 
+/** Set by installAutoLayout; lets the video window ask for a fresh layout. */
+let relayoutNow: () => void = () => {};
+
 let fittedKey = '';
 let lastStack = { width: 275, height: 348 };
 /**
@@ -142,19 +155,20 @@ let lastStack = { width: 275, height: 348 };
 function fitWindow(width: number, height: number): Promise<void> {
   lastStack = { width, height };
   const video = isVideoOpen();
-  const key = `${width}x${height}${video ? 'v' : ''}`;
+  const key = `${width}x${height}${video ? `v${getFrameWidth()}` : ''}`;
   if (key === fittedKey) return Promise.resolve();
   fittedKey = key;
   console.warn(`[layout] ${key} (x${UI_SCALE})`);
   const app = document.getElementById('app')!;
   app.style.width = `${width}px`;
   app.style.height = `${height}px`;
-  placeVideoWindow(width, Math.max(height, FRAME_H));
+  placeVideoWindow(width, height);
+  const frame = frameSize(height);
   return getCurrentWindow()
     .setSize(
       new LogicalSize(
-        (width + (video ? FRAME_W : 0)) * UI_SCALE,
-        Math.max(height, video ? FRAME_H : 0) * UI_SCALE,
+        (width + (video ? frame.w : 0)) * UI_SCALE,
+        Math.max(height, video ? frame.h : 0) * UI_SCALE,
       ),
     )
     .catch((e) => console.error('setSize failed', e));
@@ -197,8 +211,32 @@ function installAutoLayout(webamp: Webamp) {
   };
   let scheduled = false;
 
+  /** Playlist segments (29 px each) needed so the stack reaches the video's minimum height. */
+  const minPlaylistSeg = (state: any) => {
+    const pl = state.windows.genWindows.playlist;
+    const { height } = stackLayout(state);
+    const others = height - windowPixelSize(pl, false).height;
+    return Math.max(0, Math.ceil((VIDEO_STACK_FLOOR - others - 116) / 29));
+  };
+  const playlistFlexible = (state: any) => {
+    const pl = state.windows.genWindows.playlist;
+    return !!pl?.open && !pl.shade;
+  };
+
   const relayout = () => {
     scheduled = false;
+    refreshGriplessSprite();
+    const state = store.getState();
+    // With the video window open, the playlist grows so the stack is tall enough
+    // for the picture (rather than leaving an empty box under a short stack).
+    if (isVideoOpen() && playlistFlexible(state)) {
+      const pl = state.windows.genWindows.playlist;
+      const need = minPlaylistSeg(state);
+      if (pl.size[1] < need) {
+        store.dispatch({ type: 'WINDOW_SIZE_CHANGED', windowId: 'playlist', size: [0, need] });
+        return; // the store change schedules another pass
+      }
+    }
     const { width, height, moves } = stackLayout(store.getState());
     if (height === 0) return;
     void fitWindow(width, height);
@@ -213,6 +251,28 @@ function installAutoLayout(webamp: Webamp) {
     queueMicrotask(relayout);
   };
   store.subscribe(schedule);
+  relayoutNow = schedule;
+
+  // The video window's bottom-right grip: horizontal drag sets the video frame's width,
+  // vertical drag changes the playlist's height (so the whole stack and frame).
+  let startSeg = 0;
+  let startW = 0;
+  onVideoResize((dx, dy, phase) => {
+    const state = store.getState();
+    if (phase === 'start') {
+      startSeg = state.windows.genWindows.playlist?.size[1] ?? 0;
+      startW = getFrameWidth();
+    }
+    if (phase !== 'move') return;
+    if (playlistFlexible(state)) {
+      const seg = Math.min(14, Math.max(minPlaylistSeg(state), startSeg + Math.round(dy / UI_SCALE / 29)));
+      if (seg !== state.windows.genWindows.playlist.size[1]) {
+        store.dispatch({ type: 'WINDOW_SIZE_CHANGED', windowId: 'playlist', size: [0, seg] });
+      }
+    }
+    setFrameWidth(startW + dx / UI_SCALE);
+    if (getFrameWidth() !== startW) schedule();
+  });
   relayout();
 }
 
@@ -343,7 +403,7 @@ async function main() {
   };
 
   await webamp.renderWhenReady(document.getElementById('app')!);
-  mountVideoWindow(document.getElementById('webamp')!, videoEl, () => void fitWindow(lastStack.width, lastStack.height));
+  mountVideoWindow(document.getElementById('webamp')!, videoEl, () => relayoutNow());
   if (inTauri) installAutoLayout(webamp);
   installResizeScaling();
 
