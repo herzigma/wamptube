@@ -4,6 +4,8 @@
 // clock, so audio and picture cannot drift. Proven in the real WKWebView by
 // the spike (see NOTES.md).
 
+import { pcmOffer, pcmSetTrack } from './pcm';
+
 const AHEAD_S = 30;
 
 interface Seg { start: number; end: number; t0: number; t1: number } // bytes [start,end), seconds
@@ -96,6 +98,7 @@ class Feeder {
         if (this.done.has(i)) continue;
         const bytes = await fetchRange(this.tr.url, segs[i].start, segs[i].end - 1);
         if (!this.alive()) return;
+        if (this.tr.name === 'audio') pcmOffer(i, bytes); // the visualizers decode the same bytes
         await this.append(bytes);
         this.done.add(i);
         if (Math.abs(this.el.currentTime - now) > 2) break; // user seeked: restart from the new position
@@ -121,6 +124,7 @@ export class MseSession {
     this.el.pause();
     this.el.removeAttribute('src');
     this.el.load();
+    pcmSetTrack(null);
     const gen = this.gen;
     const alive = () => gen === this.gen;
     const [audio, video] = await Promise.all([
@@ -129,6 +133,11 @@ export class MseSession {
       withVideo ? loadTrack('video', `${base}/vv/${videoId}`, 'video') : Promise.resolve(null),
     ]);
     if (!alive()) return false;
+    pcmSetTrack({
+      init: audio.init,
+      segs: audio.segs,
+      fetch: (i) => fetchRange(audio.url, audio.segs[i].start, audio.segs[i].end - 1),
+    });
     const ms = new MediaSource();
     this.url = URL.createObjectURL(ms);
     this.el.src = this.url;

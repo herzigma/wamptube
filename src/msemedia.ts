@@ -1,12 +1,13 @@
 // Webamp's media engine replaced by one backed by a <video> element and MSE
 // (webamp option `__customMediaClass`, private in 2.3.1; the interface is
 // IMedia in webamp/built/types/js/media/index.d.ts). Audio plays straight from
-// the element, so the equalizer, preamp, balance and visualizer do nothing
-// while this engine is in use; volume works.
+// the element, so the equalizer, preamp and balance do nothing while this
+// engine is in use; volume works. The visualizers read pcm.ts instead.
 import { invoke } from '@tauri-apps/api/core';
 import { MseSession } from './mse';
 import { isVideoOpen } from './videowindow';
 import { setBuffering } from './throbber';
+import { pcmAnalyser, pcmSource } from './pcm';
 
 type Cb = (...a: unknown[]) => void;
 const STOPPED = 0, PLAYING = 1, PAUSED = 2;
@@ -20,7 +21,6 @@ export class MseMedia {
   private handlers = new Map<string, Cb[]>();
   private session = new MseSession(videoEl);
   private status = STOPPED;
-  private analyser: AnalyserNode | undefined;
   private off: Array<() => void> = [];
 
   constructor() {
@@ -76,11 +76,9 @@ export class MseMedia {
   setEqBand(_band: number, _value: number) {}
   disableEq() {}
   enableEq() {}
-  /** Not connected to anything: the visualizer shows silence. */
-  getAnalyser(): AnalyserNode {
-    this.analyser ??= new AudioContext().createAnalyser();
-    return this.analyser;
-  }
+  /** A stand-in fed from pcm.ts; it moves only while the FX pane is on. */
+  getAnalyser(): AnalyserNode { return (this.analyser ??= pcmAnalyser(videoEl)); }
+  private analyser: AnalyserNode | undefined;
 
   async loadFromUrl(url: string, autoPlay: boolean) {
     const m = /^(https?:\/\/127\.0\.0\.1:\d+)\/v\/([A-Za-z0-9_-]{11})$/.exec(url);
@@ -119,6 +117,9 @@ export class MseMedia {
     this.pause();
   }
 }
+
+/** Audio numbers for the FX pane: decoded separately from playback, see pcm.ts. */
+export const fxAudio = pcmSource(videoEl);
 
 /** Proxy origin, kept so other modules can use it. */
 export const proxyBase = () => invoke<string>('proxy_base');

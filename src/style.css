@@ -81,6 +81,41 @@ html, body {
 #webamp .video-window #video-close { position: absolute; inset: 0; }
 #video-pane { position: absolute; inset: 0; width: 100%; height: 100%; background: #000; object-fit: contain; }
 #webamp .video-window #video-pane { image-rendering: auto; }
+/* FX visualizer (src/fx.ts) shares the frame; data-pane says which of the two is showing. */
+#fx-pane { position: absolute; inset: 0; width: 100%; height: 100%; background: #000; cursor: pointer; }
+#webamp .video-window #fx-pane { image-rendering: pixelated; }
+#webamp .video-window[data-pane="fx"] #video-pane,
+#webamp .video-window[data-pane="fx"] .title-video,
+#webamp .video-window[data-pane="video"] #fx-pane,
+#webamp .video-window[data-pane="video"] .title-fx { display: none; }
+
+/* FX control strip: a 16 px band under the picture, above the frame's bottom bar, in the
+   main window's body color (which the button art's dark edge is drawn for; not skin-aware).
+   Buttons that don't fit a narrow frame wrap to a second row, which the band's height cuts off. */
+#webamp .video-window .fx-strip {
+  display: none; position: absolute; left: 0; right: 0; bottom: 0; height: 12px;
+  padding: 2px; overflow: hidden; flex-wrap: wrap; align-content: flex-start;
+  background: rgb(43, 43, 68);
+}
+#webamp .video-window[data-pane="fx"]:not(.strip-hidden) .fx-strip { display: flex; }
+#webamp .video-window[data-pane="fx"]:not(.strip-hidden) #fx-pane { height: calc(100% - 16px); }
+#webamp .video-window .fx-ctl {
+  flex: none; width: 23px; height: 12px; image-rendering: pixelated;
+  background: url(/skins/fx-strip.png) calc(-23px * var(--i)) 0 / auto 48px no-repeat;
+}
+#webamp .video-window .fx-ctl:nth-child(8), #webamp .video-window .fx-ctl:last-child { margin-left: 4px; }
+/* Effects 1-5 on the left; everything else (WV CO, MI SP, AU) at the band's right end */
+#webamp .video-window .fx-ctl:nth-child(6) { margin-left: auto; }
+#webamp .video-window .fx-ctl.on { background-position-y: -12px; }
+#webamp .video-window .fx-ctl:active { background-position-y: -24px; }
+#webamp .video-window .fx-ctl.on:active { background-position-y: -36px; }
+/* Minimize button beside the close button, FX only: hides the strip. Art is the playlist's shade button. */
+#webamp .video-window .gen-shade {
+  display: none; position: absolute; right: 12px; top: 3px; width: 9px; height: 9px;
+  background: url(/skins/gen-shade.png) 0 0 / 9px 18px no-repeat; image-rendering: pixelated;
+}
+#webamp .video-window[data-pane="fx"] .gen-shade { display: block; }
+#webamp .video-window .gen-shade:active { background-position-y: -9px; }
 
 /* While the video window is open its bottom-right grip is the resize handle: the
    playlist's own grip stops working, and its art is removed by swapping in a copy
@@ -89,18 +124,19 @@ html, body {
 #webamp.video-active.grip-patched .playlist-bottom-right { background-image: var(--playlist-bottom-right); }
 #webamp .video-window .video-resize { position: absolute; right: 0; bottom: 0; width: 20px; height: 20px; cursor: nwse-resize; }
 
-/* VI button (video toggle) in the main window. It takes the place of Webamp's
-   mono/stereo lights, which this player never drives, so those are hidden. */
+/* VI (video) and FX (visualizer) toggle buttons in the main window. They take the place
+   of Webamp's mono/stereo lights, which this player never drives, so those are hidden. */
 #main-window .mono-stereo { display: none; }
-#main-window .vi-button {
+#main-window .vi-button, #main-window .fx-button {
   position: absolute; left: 242px; top: 41px; width: 23px; height: 12px;
   background: url(/skins/vi-button.png) 0 0 / 23px 48px no-repeat;
   image-rendering: pixelated;
 }
-#main-window .vi-button.on { background-position: 0 -12px; }
-#main-window .vi-button:active { background-position: 0 -24px; }
-#main-window .vi-button.on:active { background-position: 0 -36px; }
-#main-window.shade .vi-button { display: none; }
+#main-window .fx-button { left: 219px; background-image: url(/skins/fx-button.png); }
+#main-window :is(.vi-button, .fx-button).on { background-position: 0 -12px; }
+#main-window :is(.vi-button, .fx-button):active { background-position: 0 -24px; }
+#main-window :is(.vi-button, .fx-button).on:active { background-position: 0 -36px; }
+#main-window.shade :is(.vi-button, .fx-button) { display: none; }
 
 /*
  * Buffering throbber (src/throbber.ts): a canvas drawn over the Winamp logo

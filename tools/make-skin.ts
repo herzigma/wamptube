@@ -295,15 +295,26 @@ const files = {
   'PLEDIT.TXT': new TextEncoder().encode(pleditTxt),
 };
 
+const GLYPHS: Record<string, string[]> = {
+  V: ['x.x', 'x.x', 'x.x', 'x.x', '.x.'], I: ['xxx', '.x.', '.x.', '.x.', 'xxx'],
+  F: ['.xx', 'x..', 'xxx', 'x..', 'x..'], X: ['x.x', 'x.x', '.x.', 'x.x', 'x.x'],
+  A: ['.x.', 'x.x', 'xxx', 'x.x', 'x.x'], U: ['x.x', 'x.x', 'x.x', 'x.x', '.xx'],
+  W: ['x.x', 'x.x', 'x.x', 'xxx', 'x.x'], C: ['.xx', 'x..', 'x..', 'x..', '.xx'],
+  O: ['.x.', 'x.x', 'x.x', 'x.x', '.x.'], M: ['x.x', 'xxx', 'xxx', 'x.x', 'x.x'],
+  P: ['xxx', 'x.x', 'xxx', 'x..', 'x..'], S: ['.xx', 'x..', '.x.', '..x', 'xx.'],
+  '1': ['.x.', 'xx.', '.x.', '.x.', 'xxx'], '2': ['xx.', '..x', '.x.', 'x..', 'xxx'],
+  '3': ['xx.', '..x', '.x.', '..x', 'xx.'], '4': ['x.x', 'x.x', 'xxx', '..x', '..x'],
+  '5': ['xxx', 'x..', 'xx.', '..x', 'xx.'],
+};
 /**
- * VI button art for the video toggle (not a Webamp sprite, so it isn't part of
- * the skin): the EQ button's four sprites with the "EQ" letters redrawn as "VI".
- * A 23x48 strip, top to bottom: off, on, off pressed, on pressed.
+ * Toggle-button art that isn't a Webamp sprite (so not part of the skin): the EQ
+ * button's four sprites with the "EQ" letters redrawn as `label`, one or two of
+ * the glyphs above. A 23x48 strip, top to bottom: off, on, off pressed, on pressed.
  */
-function viButtons(): PNG {
-  const V = ['x.x', 'x.x', 'x.x', 'x.x', '.x.'], I = ['xxx', '.x.', '.x.', '.x.', 'xxx'];
+function letterButtons(label: string): PNG {
   const names = ['MAIN_EQ_BUTTON', 'MAIN_EQ_BUTTON_SELECTED', 'MAIN_EQ_BUTTON_DEPRESSED', 'MAIN_EQ_BUTTON_DEPRESSED_SELECTED'];
   const out = new PNG({ width: 23, height: 12 * names.length });
+  const at = label.length === 1 ? [12] : [10, 14];
   names.forEach((n, k) => {
     const src = imgs[n];
     if (!src) throw new Error(`sprite ${n} not found in the webamp bundle`);
@@ -311,8 +322,8 @@ function viButtons(): PNG {
     const face = px.get(10, 2), ink = px.get(11, 3); // button face; the letters' ink colour
     const e = px.clone();
     for (let y = 3; y <= 7; y++) for (let x = 9; x <= 18; x++) e.put(x, y, face);
-    [[V, 10], [I, 14]].forEach(([g, x0]) => (g as string[]).forEach((row, r) => {
-      for (let i = 0; i < 3; i++) if (row[i] === 'x') e.put((x0 as number) + i, 3 + r, ink);
+    [...label].forEach((ch, c) => GLYPHS[ch].forEach((row, r) => {
+      for (let i = 0; i < 3; i++) if (row[i] === 'x') e.put(at[c] + i, 3 + r, ink);
     }));
     PNG.bitblt(e.png, out, 0, 0, 23, 12, 0, 12 * k);
   });
@@ -320,6 +331,32 @@ function viButtons(): PNG {
   return out;
 }
 
+/** The FX pane's control strip (src/videowindow.ts, FX_CONTROLS): one 23x48 column per button, in this order. */
+const FX_STRIP = ['1', '2', '3', '4', '5', 'WV', 'CO', 'MI', 'SP', 'AU'];
+function fxStrip(): PNG {
+  const out = new PNG({ width: 23 * FX_STRIP.length, height: 48 });
+  FX_STRIP.forEach((label, k) => PNG.bitblt(letterButtons(label), out, 0, 0, 23, 48, 23 * k, 0));
+  return out;
+}
+
+/**
+ * Minimize button for the video / FX window's title bar: the playlist window's
+ * shade button, cut out of its title-bar corner (the gen-window art has only a
+ * close button). 9x18: normal, then pressed.
+ */
+function genShade(): PNG {
+  const corner = imgs.PLAYLIST_TOP_RIGHT_CORNER_SELECTED, pressed = imgs.PLAYLIST_COLLAPSE_SELECTED;
+  if (!corner || !pressed) throw new Error('playlist shade sprites not found in the webamp bundle');
+  const out = new PNG({ width: 9, height: 18 });
+  PNG.bitblt(corner, out, 25 - 12 - 9, 3, 9, 9, 0, 0); // #playlist-shade-button: right 12, top 3
+  PNG.bitblt(pressed, out, 0, 0, 9, 9, 0, 9);
+  for (let i = 3; i < out.data.length; i += 4) out.data[i] = 255;
+  return out;
+}
+
 Deno.mkdirSync('public/skins', { recursive: true });
-Deno.writeFileSync('public/skins/vi-button.png', PNG.sync.write(viButtons()));
+Deno.writeFileSync('public/skins/vi-button.png', PNG.sync.write(letterButtons('VI')));
+Deno.writeFileSync('public/skins/fx-button.png', PNG.sync.write(letterButtons('FX')));
+Deno.writeFileSync('public/skins/fx-strip.png', PNG.sync.write(fxStrip()));
+Deno.writeFileSync('public/skins/gen-shade.png', PNG.sync.write(genShade()));
 Deno.writeFileSync('public/skins/wamptube.wsz', zipSync(files));

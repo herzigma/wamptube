@@ -4,13 +4,14 @@ import Webamp from 'webamp';
 if (import.meta.env.VITE_SPIKE) location.replace('/spike.html');
 import { invoke } from '@tauri-apps/api/core';
 import { getCurrentWindow, LogicalSize } from '@tauri-apps/api/window';
-import { MseMedia, videoEl } from './msemedia';
+import { MseMedia, fxAudio, videoEl } from './msemedia';
+import { demoSource } from './fx';
 import { installThrobber } from './throbber';
 import {
   VIDEO_STACK_FLOOR,
   frameSize,
   getFrameWidth,
-  isVideoOpen,
+  isPaneOpen,
   installVideoMenuItem,
   mountVideoWindow,
   onVideoResize,
@@ -156,7 +157,7 @@ let lastStack = { width: 275, height: 348 };
  */
 function fitWindow(width: number, height: number): Promise<void> {
   lastStack = { width, height };
-  const video = isVideoOpen();
+  const video = isPaneOpen();
   const key = `${width}x${height}${video ? `v${getFrameWidth()}` : ''}`;
   if (key === fittedKey) return Promise.resolve();
   fittedKey = key;
@@ -231,7 +232,7 @@ function installAutoLayout(webamp: Webamp) {
     const state = store.getState();
     // With the video window open, the playlist grows so the stack is tall enough
     // for the picture (rather than leaving an empty box under a short stack).
-    if (isVideoOpen() && playlistFlexible(state)) {
+    if (isPaneOpen() && playlistFlexible(state)) {
       const pl = state.windows.genWindows.playlist;
       const need = minPlaylistSeg(state);
       if (pl.size[1] < need) {
@@ -405,10 +406,17 @@ async function main() {
   };
 
   await webamp.renderWhenReady(document.getElementById('app')!);
-  mountVideoWindow(document.getElementById('webamp')!, videoEl, () => relayoutNow());
+  mountVideoWindow(
+    document.getElementById('webamp')!,
+    videoEl,
+    () => relayoutNow(),
+    // `?fxdemo`: made-up audio, for looking at FX in a plain browser where nothing plays
+    () => (new URLSearchParams(location.search).has('fxdemo') ? demoSource : fxAudio),
+  );
   installVideoMenuItem();
   installThrobber();
   if (inTauri) installAutoLayout(webamp);
+  else placeVideoWindow(275, 348); // plain browser: no auto layout, so size the pane for the default stack
   installResizeScaling();
 
   if (import.meta.env.VITE_SELFTEST === 'timeline') void timelineProbe(webamp);
