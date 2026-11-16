@@ -6,6 +6,7 @@
 import { invoke } from '@tauri-apps/api/core';
 import { MseSession } from './mse';
 import { isVideoOpen } from './videowindow';
+import { setBuffering } from './throbber';
 
 type Cb = (...a: unknown[]) => void;
 const STOPPED = 0, PLAYING = 1, PAUSED = 2;
@@ -27,6 +28,11 @@ export class MseMedia {
       videoEl.addEventListener(ev, fn);
       this.off.push(() => videoEl.removeEventListener(ev, fn));
     };
+    // Stalled mid-stream (or after a seek): throb until the element can play again.
+    listen('waiting', () => setBuffering('stall', true));
+    for (const ev of ['playing', 'canplay', 'pause', 'emptied', 'error']) {
+      listen(ev, () => setBuffering('stall', false));
+    }
     listen('timeupdate', () => this.emit('timeupdate'));
     listen('durationchange', () => this.emit('fileLoaded'));
     listen('ended', () => { this.setStatus(STOPPED); this.emit('ended'); });
@@ -81,12 +87,15 @@ export class MseMedia {
     if (!m) { console.error('[mse] not a proxy /v/ url:', url); return; }
     console.warn(`[mse] load ${m[2]} autoPlay=${autoPlay}`);
     this.emit('waiting');
+    // Resolving + fetching the first chunks takes seconds: the start-of-track buffering.
+    setBuffering('load', true);
     this.status = STOPPED;
     let current: boolean;
     try {
       current = await this.session.load(m[1], m[2], isVideoOpen());
     } catch (e) {
       console.error('[mse] load failed', String((e as Error)?.message ?? e));
+      setBuffering('load', false);
       this.emit('stopWaiting');
       this.emit('ended');
       return;
@@ -94,7 +103,14 @@ export class MseMedia {
     console.warn(`[mse] ${m[2]} ${current ? 'ready' : 'superseded'}`);
     if (!current) return; // a newer track was requested meanwhile; it owns the UI state now
     this.emit('stopWaiting');
-    if (autoPlay) void this.play();
+    if (autoPlay) {
+      // Data is appended but playback hasn't started: keep throbbing until 'playing'.
+      setBuffering('load', false);
+      setBuffering('stall', videoEl.readyState < 3);
+      void this.play();
+    } else {
+      setBuffering('load', false);
+    }
   }
 
   dispose() {
