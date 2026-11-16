@@ -5,6 +5,7 @@ if (import.meta.env.VITE_SPIKE) location.replace('/spike.html');
 import { invoke } from '@tauri-apps/api/core';
 import { getCurrentWindow, LogicalSize } from '@tauri-apps/api/window';
 import { MseMedia, videoEl } from './msemedia';
+import { FRAME_H, FRAME_W, isVideoOpen, mountVideoWindow, placeVideoWindow } from './videowindow';
 import {
   handleAddUrlEvent,
   handleTrackDropEvent,
@@ -81,10 +82,10 @@ function installDragHandler() {
       if (e.button !== 0) return;
       const target = e.target as HTMLElement | null;
       if (!target) return;
-      const bar = target.closest('#main-window #title-bar');
+      const bar = target.closest('#main-window #title-bar, .video-top');
       if (!bar) return;
       // leave the menu / minimize / shade / close buttons alone
-      if (target.closest('#option, #minimize, #shade, #close')) return;
+      if (target.closest('#option, #minimize, #shade, #close, #video-close')) return;
       e.preventDefault();
       e.stopPropagation();
       getCurrentWindow()
@@ -130,30 +131,32 @@ function stackLayout(state: any) {
   return { width, height, moves };
 }
 
-/** 1x width of the video pane to the right of the Webamp stack; it is 16:9. */
-const VIDEO_W = 480;
-const VIDEO_H = (VIDEO_W * 9) / 16;
-
 let fittedKey = '';
+let lastStack = { width: 275, height: 348 };
 /**
- * Size #app (1x) to a stack of the given size, put the video pane to its right,
- * and size the Tauri window (scaled) to hold both. #app has to match the stack:
- * on every window resize Webamp re-checks that its windows fit inside the mount
- * node and shoves them back in if not.
+ * Size #app (1x) to a stack of the given size, put the video window to its right
+ * when open, and size the Tauri window (scaled) to hold both. #app has to match
+ * the stack: on every window resize Webamp re-checks that its windows fit inside
+ * the mount node and shoves them back in if not.
  */
 function fitWindow(width: number, height: number): Promise<void> {
-  const key = `${width}x${height}`;
+  lastStack = { width, height };
+  const video = isVideoOpen();
+  const key = `${width}x${height}${video ? 'v' : ''}`;
   if (key === fittedKey) return Promise.resolve();
   fittedKey = key;
   console.warn(`[layout] ${key} (x${UI_SCALE})`);
   const app = document.getElementById('app')!;
   app.style.width = `${width}px`;
   app.style.height = `${height}px`;
-  videoEl.style.left = `${width * UI_SCALE}px`;
-  videoEl.style.width = `${VIDEO_W * UI_SCALE}px`;
-  videoEl.style.height = `${VIDEO_H * UI_SCALE}px`;
+  placeVideoWindow(width, Math.max(height, FRAME_H));
   return getCurrentWindow()
-    .setSize(new LogicalSize((width + VIDEO_W) * UI_SCALE, Math.max(height, VIDEO_H) * UI_SCALE))
+    .setSize(
+      new LogicalSize(
+        (width + (video ? FRAME_W : 0)) * UI_SCALE,
+        Math.max(height, video ? FRAME_H : 0) * UI_SCALE,
+      ),
+    )
     .catch((e) => console.error('setSize failed', e));
 }
 
@@ -339,8 +342,8 @@ async function main() {
     return p;
   };
 
-  document.body.appendChild(videoEl);
   await webamp.renderWhenReady(document.getElementById('app')!);
+  mountVideoWindow(document.getElementById('webamp')!, videoEl, () => void fitWindow(lastStack.width, lastStack.height));
   if (inTauri) installAutoLayout(webamp);
   installResizeScaling();
 
