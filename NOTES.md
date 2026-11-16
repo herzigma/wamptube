@@ -156,11 +156,27 @@ using each stream's `sidx` for segment offsets. Test video `Hf20ZzMRs-I`, in the
 Wired into the player: `src/mse.ts` is the engine, `src/msemedia.ts` is an `IMedia` class passed as
 Webamp's `__customMediaClass`, and `main.ts` puts the shared `<video>` in a 480x270 pane to the
 right of the Webamp stack (window width grows by that). Play, pause, seek, volume and track
-changes go through Webamp as before. While this engine is in use the EQ, preamp, balance and
-visualizer do nothing (audio plays straight from the element). Startup loads track 1 through it
+changes go through Webamp as before. While this engine is in use the EQ, preamp and balance
+do nothing (audio plays straight from the element). Startup loads track 1 through it
 without errors; clicking through playback is not yet checked. Known gaps: the video buffer is
 never trimmed (memory grows over a long track), each track now costs a second yt-dlp resolve
 (the video stream), and `VITE_SELFTEST` still targets Webamp's old `<audio>` element.
+
+## Visualizers (FX pane and Webamp's small one)
+
+- **A Web Audio tap on the MSE element reads silence in WKWebView.** `createMediaElementSource`
+  on the `<video>` with the AudioContext running gave a waveform peak of 0/128 for 8 s of a
+  playing track. Don't retry this route.
+- **Decoding the segments a second time works.** `decodeAudioData` (on an `OfflineAudioContext`)
+  accepts init segment + one media segment and returns about 9.94 s for a 9.98 s segment (a
+  little is trimmed from the front, so `src/pcm.ts` counts back from the segment's end).
+  `AudioDecoder` (WebCodecs) also exists and supports `mp4a.40.2`, unused so far.
+- `src/pcm.ts` keeps the last few segments' bytes as `mse.ts` appends them and decodes the one
+  under the playhead (and the next, 3 s ahead) while the FX pane is on. Readers ask for the
+  waveform at `currentTime`. Checked in the app: real levels at 5, 8 and 12 s, across a segment
+  boundary. Sync by eye and behaviour after a seek are not yet checked.
+- Real MilkDrop (butterchurn) is out: it needs `'unsafe-eval'`. `src/fx.ts` is our own WebGL
+  feedback effect instead.
 
 ## Engine decision
 

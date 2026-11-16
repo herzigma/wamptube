@@ -1,4 +1,5 @@
-// The video pane's window chrome. It is drawn inside Webamp's own #webamp root
+// The big pane's window chrome: it shows either the video picture or the FX
+// visualizer (src/fx.ts), never both. It is drawn inside Webamp's own #webamp root
 // (so it scales with everything else) from the skin's "gen window" classes, the
 // frame Winamp skins define for extra windows (GEN.BMP): corners, bottom edge,
 // close button and title lettering all come from the active skin.
@@ -26,6 +27,8 @@ export function frameSize(stackHeight: number) {
   return { w: frameWidth, h: Math.max(stackHeight, MIN_FRAME_H) };
 }
 
+import { FX_PRESET_COUNT, Fx, demoSource, type FxSource } from './fx';
+
 const div = (cls: string, ...kids: HTMLElement[]) => {
   const d = document.createElement('div');
   d.className = cls;
@@ -41,37 +44,128 @@ let resizeCb: (dxPx: number, dyPx: number, phase: 'start' | 'move' | 'end') => v
 export function onVideoResize(cb: typeof resizeCb) {
   resizeCb = cb;
 }
-let open = true;
+/** What the pane shows. Video and FX share the one frame, so they can't both be on. */
+type Pane = 'off' | 'video' | 'fx';
+let pane: Pane = 'video';
 let onChange: () => void = () => {};
+let fx: Fx | undefined;
+let fxSource: () => FxSource = () => demoSource;
 
-export const isVideoOpen = () => open;
+/** The frame is on screen (with either content): what the layout cares about. */
+export const isPaneOpen = () => pane !== 'off';
+/** The picture is showing: what decides whether a track's video stream is fetched. */
+export const isVideoOpen = () => pane === 'video';
 
-export function setVideoOpen(v: boolean) {
-  open = v;
-  if (frame) frame.style.display = v ? 'flex' : 'none';
-  host?.classList.toggle('video-active', v);
-  viButton?.classList.toggle('on', v);
+export function setPane(p: Pane) {
+  pane = p;
+  if (frame) {
+    frame.style.display = p === 'off' ? 'none' : 'flex';
+    frame.dataset.pane = p; // style.css shows the matching title and content
+  }
+  host?.classList.toggle('video-active', p !== 'off');
+  viButton?.classList.toggle('on', p === 'video');
+  fxButton?.classList.toggle('on', p === 'fx');
+  if (p === 'fx') {
+    try {
+      if (!fx) {
+        fx = new Fx(fxCanvas, fxSource());
+        fx.onState = syncStrip;
+      }
+      fx.start();
+      syncStrip();
+    } catch (e) {
+      console.error('[fx] start failed', String((e as Error)?.message ?? e));
+    }
+  } else {
+    fx?.stop();
+  }
   onChange();
 }
-export const toggleVideo = () => setVideoOpen(!open);
+export const toggleVideo = () => setPane(pane === 'video' ? 'off' : 'video');
+export const toggleFx = () => setPane(pane === 'fx' ? 'off' : 'fx');
 
-/** The VI button in the main window, where the mono/stereo lights were; lit while the video is on. */
+/** VI and FX buttons in the main window, where the mono/stereo lights were; each is lit while its pane is on. */
 let viButton: HTMLElement | undefined;
-function installVideoButton() {
+let fxButton: HTMLElement | undefined;
+const fxCanvas = document.createElement('canvas');
+fxCanvas.id = 'fx-pane';
+fxCanvas.title = 'Click for the next effect';
+
+function installPaneButtons() {
   const main = document.getElementById('main-window');
   if (!main || viButton) return;
-  viButton = div('vi-button');
-  viButton.title = 'Toggle Video (Alt+V)';
-  viButton.addEventListener('mousedown', (e) => e.stopPropagation()); // not a window drag
-  viButton.addEventListener('click', toggleVideo);
-  viButton.classList.toggle('on', open);
-  main.appendChild(viButton);
+  const make = (cls: string, title: string, toggle: () => void, on: boolean) => {
+    const b = div(cls);
+    b.title = title;
+    b.addEventListener('mousedown', (e) => e.stopPropagation()); // not a window drag
+    b.addEventListener('click', toggle);
+    b.classList.toggle('on', on);
+    main.appendChild(b);
+    return b;
+  };
+  viButton = make('vi-button', 'Toggle Video (Alt+V)', toggleVideo, pane === 'video');
+  fxButton = make('fx-button', 'Toggle FX visualizer (Alt+F)', toggleFx, pane === 'fx');
 }
 
-/** Build the window around `video` and add it to `host` (Webamp's #webamp). */
-export function mountVideoWindow(hostEl: HTMLElement, video: HTMLVideoElement, changed: () => void) {
+/**
+ * The FX control strip: a band under the picture, just above the frame's bottom bar
+ * (the bar itself has border lines through it, so buttons can't sit on it). Order matches the columns of
+ * /skins/fx-strip.png (FX_STRIP in tools/make-skin.ts). `lit` says when a button's
+ * light is on; the step-through buttons (WV, CO) have none.
+ */
+const FX_CONTROLS: { title: string; press: (f: Fx) => void; lit?: (f: Fx) => boolean }[] = [
+  ...Array.from({ length: FX_PRESET_COUNT }, (_, i) => ({
+    title: `Effect ${i + 1}`,
+    press: (f: Fx) => f.setPreset(i),
+    lit: (f: Fx) => f.state.preset === i,
+  })),
+  { title: 'Waveform shape (next)', press: (f) => f.nextWave() },
+  { title: 'Color (next)', press: (f) => f.nextColor() },
+  { title: 'Mirror', press: (f) => f.toggle('mirror'), lit: (f) => f.state.mirror },
+  { title: 'Spectrum bars', press: (f) => f.toggle('bars'), lit: (f) => f.state.bars },
+  { title: 'Auto: change effect by itself', press: (f) => f.toggle('auto'), lit: (f) => f.state.auto },
+];
+let stripButtons: HTMLElement[] = [];
+
+function buildStrip() {
+  stripButtons = FX_CONTROLS.map((c, i) => {
+    const b = div('fx-ctl');
+    b.title = c.title;
+    b.style.setProperty('--i', String(i));
+    b.addEventListener('mousedown', (e) => e.stopPropagation());
+    b.addEventListener('click', () => { if (fx) { c.press(fx); syncStrip(); } });
+    return b;
+  });
+  return div('fx-strip', ...stripButtons);
+}
+
+/** Light the strip's buttons to match the visualizer. */
+function syncStrip() {
+  if (!fx) return;
+  FX_CONTROLS.forEach((c, i) => stripButtons[i]?.classList.toggle('on', !!c.lit?.(fx!)));
+}
+
+const STRIP_KEY = 'wamptube.fxStripHidden';
+/** The title bar's minimize button hides the strip; remembered between runs. */
+function setStripHidden(hidden: boolean) {
+  frame?.classList.toggle('strip-hidden', hidden);
+  try { localStorage.setItem(STRIP_KEY, hidden ? '1' : ''); } catch { /* no storage: just not remembered */ }
+}
+
+const titleLetters = (word: string) => {
+  const t = div(`gen-top-title title-${word.toLowerCase()}`);
+  for (const ch of word) t.append(div(`gen-text-letter gen-text-${ch.toLowerCase()}`));
+  return t;
+};
+
+/**
+ * Build the window around `video` and add it to `host` (Webamp's #webamp).
+ * `audio` gives the FX visualizer its audio numbers; it is called the first time FX is switched on.
+ */
+export function mountVideoWindow(hostEl: HTMLElement, video: HTMLVideoElement, changed: () => void, audio: () => FxSource) {
   host = hostEl;
   onChange = changed;
+  fxSource = audio;
   const grip = div('video-resize');
   grip.title = 'Resize';
   grip.addEventListener('mousedown', (e) => {
@@ -91,10 +185,12 @@ export function mountVideoWindow(hostEl: HTMLElement, video: HTMLVideoElement, c
   });
   const close = div('');
   close.id = 'video-close';
-  close.title = 'Close video (Alt+V)';
-  close.addEventListener('click', () => setVideoOpen(false));
-  const title = div('gen-top-title');
-  for (const ch of 'VIDEO') title.append(div(`gen-text-letter gen-text-${ch.toLowerCase()}`));
+  close.title = 'Close';
+  close.addEventListener('click', () => setPane('off'));
+  const shade = div('gen-shade');
+  shade.title = 'Hide / show the FX controls';
+  shade.addEventListener('mousedown', (e) => e.stopPropagation()); // not a window drag
+  shade.addEventListener('click', () => setStripHidden(!frame?.classList.contains('strip-hidden')));
   frame = div(
     'gen-window selected video-window',
     div(
@@ -102,26 +198,32 @@ export function mountVideoWindow(hostEl: HTMLElement, video: HTMLVideoElement, c
       div('gen-top-left'),
       div('gen-top-left-fill'),
       div('gen-top-left-end'),
-      title,
+      titleLetters('VIDEO'),
+      titleLetters('FX'),
       div('gen-top-right-end'),
       div('gen-top-right-fill'),
-      div('gen-top-right', div('gen-close', close)),
+      div('gen-top-right', shade, div('gen-close', close)),
     ),
     div(
       'gen-middle',
       div('gen-middle-left', div('gen-middle-left-bottom')),
-      div('gen-middle-center', video),
+      div('gen-middle-center', video, fxCanvas, buildStrip()),
       div('gen-middle-right', div('gen-middle-right-bottom')),
     ),
     div('gen-bottom', div('gen-bottom-left'), div('gen-bottom-right', grip)),
   );
   frame.style.left = '275px'; // beside the default stack until the first layout
   host.appendChild(frame);
-  host.classList.toggle('video-active', open);
+  frame.dataset.pane = pane;
+  let hidden = false;
+  try { hidden = !!localStorage.getItem(STRIP_KEY); } catch { /* no storage */ }
+  setStripHidden(hidden);
+  host.classList.toggle('video-active', pane !== 'off');
   refreshGriplessSprite();
-  installVideoButton();
+  installPaneButtons();
   document.addEventListener('keydown', (e) => {
     if (e.altKey && e.code === 'KeyV') { e.preventDefault(); toggleVideo(); }
+    if (e.altKey && e.code === 'KeyF') { e.preventDefault(); toggleFx(); }
   });
 }
 
@@ -176,7 +278,7 @@ export function refreshGriplessSprite() {
 }
 
 /**
- * Add a "Video" check item under "Playlist Editor" in Webamp's right-click menu.
+ * Add "Video" and "FX Visualizer" check items under "Playlist Editor" in Webamp's right-click menu.
  * Webamp has no API for extra items, so this watches for its menu portal
  * (#webamp-context-menu, rebuilt on every open) and inserts a matching <li>.
  */
@@ -185,11 +287,14 @@ export function installVideoMenuItem() {
     const items = [...menu.querySelectorAll('li')];
     const anchor = items.find((li) => li.textContent?.trim() === 'Playlist Editor');
     if (!anchor || menu.querySelector('li.video-toggle')) return;
-    const li = anchor.cloneNode(false) as HTMLLIElement;
-    li.className = `video-toggle${open ? ' checked' : ''}`;
-    li.textContent = 'Video';
-    li.addEventListener('click', () => toggleVideo()); // Webamp's own click-away handler closes the menu
-    anchor.after(li);
+    const item = (label: string, on: boolean, toggle: () => void) => {
+      const li = anchor.cloneNode(false) as HTMLLIElement;
+      li.className = `video-toggle${on ? ' checked' : ''}`;
+      li.textContent = label;
+      li.addEventListener('click', () => toggle()); // Webamp's own click-away handler closes the menu
+      return li;
+    };
+    anchor.after(item('Video', pane === 'video', toggleVideo), item('FX Visualizer', pane === 'fx', toggleFx));
   };
   new MutationObserver(() => {
     const m = document.getElementById('webamp-context-menu');

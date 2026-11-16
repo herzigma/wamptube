@@ -69,6 +69,16 @@ Two halves. The webview draws the UI and never contacts YouTube; the Rust core o
   cut at runtime from the active skin's main background at the logo's spot (`X,Y,W,H`), so a custom skin
   whose artwork differs there gets a pulse on that artwork, or nothing if the area is flat. Not yet
   skin-aware beyond that.
+- `src/videowindow.ts` – the big pane to the right of the stack and its VI / FX buttons. The pane
+  shows the video picture or the FX visualizer, never both (`setPane('off' | 'video' | 'fx')`).
+- `src/fx.ts` – the FX visualizer: a MilkDrop-style WebGL feedback effect (our own; butterchurn
+  needs `'unsafe-eval'`). Presets are the `PRESETS` table. A band under the picture holds its control strip (effect 1-5, wave shape, color,
+  mirror, spectrum bars, auto; `FX_CONTROLS` in `videowindow.ts`), which the title
+  bar's minimize button hides. Button art comes from `tools/make-skin.ts`.
+  `http://localhost:1420/?fxdemo` shows it in a plain browser on made-up audio.
+- `src/pcm.ts` – audio numbers for FX and for Webamp's small visualizer. It decodes the AAC
+  segments a second time, only while FX is on, because WKWebView cannot tap the element's
+  sound (see NOTES.md). `getAnalyser()` in `msemedia.ts` returns a stand-in backed by it.
 - `src/addsource.ts` – Webamp's `handleAddUrlEvent` (ADD > URL, with a small input box) and
   `handleTrackDropEvent` (dropped links). Both call `list_source`, then `save_source`. Dropping
   works because `dragDropEnabled` is off in `tauri.conf.json`; Tauri would otherwise swallow the drop.
