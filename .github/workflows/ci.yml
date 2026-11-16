@@ -1,0 +1,54 @@
+name: CI
+
+# Offline checks on every pull request into main and by hand. Nothing here needs
+# YouTube, yt-dlp or a running app. (The live proxy test and VITE_SELFTEST are
+# ignored/opt-in and stay out of CI.) build.yml still builds and releases on push
+# to main.
+on:
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  frontend:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+      - run: deno install --frozen
+      - name: Front-end unit tests
+        run: deno task test
+      - name: Type-check and production build
+        run: deno task build
+
+  rust:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+      # tauri's build script expects the front-end dist/ to exist
+      - run: deno install --frozen
+      - run: deno task build
+      - name: Clippy
+        working-directory: src-tauri
+        run: cargo clippy --all-targets -- -D warnings
+      - name: Rust tests (offline: unit tests and proxy against a fake upstream)
+        working-directory: src-tauri
+        run: cargo test
