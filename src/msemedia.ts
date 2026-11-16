@@ -5,6 +5,7 @@
 // while this engine is in use; volume works.
 import { invoke } from '@tauri-apps/api/core';
 import { MseSession } from './mse';
+import { isVideoOpen } from './videowindow';
 
 type Cb = (...a: unknown[]) => void;
 const STOPPED = 0, PLAYING = 1, PAUSED = 2;
@@ -83,7 +84,7 @@ export class MseMedia {
     this.status = STOPPED;
     let current: boolean;
     try {
-      current = await this.session.load(m[1], m[2]);
+      current = await this.session.load(m[1], m[2], isVideoOpen());
     } catch (e) {
       console.error('[mse] load failed', String((e as Error)?.message ?? e));
       this.emit('stopWaiting');

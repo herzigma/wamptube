@@ -88,3 +88,16 @@ html, body {
 #webamp.video-active #playlist-window #playlist-resize-target { pointer-events: none; }
 #webamp.video-active.grip-patched .playlist-bottom-right { background-image: var(--playlist-bottom-right); }
 #webamp .video-window .video-resize { position: absolute; right: 0; bottom: 0; width: 20px; height: 20px; cursor: nwse-resize; }
+
+/* VI button (video toggle) in the main window. It takes the place of Webamp's
+   mono/stereo lights, which this player never drives, so those are hidden. */
+#main-window .mono-stereo { display: none; }
+#main-window .vi-button {
+  position: absolute; left: 242px; top: 41px; width: 23px; height: 12px;
+  background: url(/skins/vi-button.png) 0 0 / 23px 48px no-repeat;
+  image-rendering: pixelated;
+}
+#main-window .vi-button.on { background-position: 0 -12px; }
+#main-window .vi-button:active { background-position: 0 -24px; }
+#main-window .vi-button.on:active { background-position: 0 -36px; }
+#main-window.shade .vi-button { display: none; }

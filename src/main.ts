@@ -10,6 +10,7 @@ import {
   frameSize,
   getFrameWidth,
   isVideoOpen,
+  installVideoMenuItem,
   mountVideoWindow,
   onVideoResize,
   placeVideoWindow,
@@ -404,6 +405,7 @@ async function main() {
 
   await webamp.renderWhenReady(document.getElementById('app')!);
   mountVideoWindow(document.getElementById('webamp')!, videoEl, () => relayoutNow());
+  installVideoMenuItem();
   if (inTauri) installAutoLayout(webamp);
   installResizeScaling();
 
