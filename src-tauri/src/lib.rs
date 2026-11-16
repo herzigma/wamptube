@@ -133,6 +133,12 @@ async fn list_source(
     list_and_wrap(&proxy, &source).await
 }
 
+/// Spike: loopback origin of the proxy, e.g. `http://127.0.0.1:54321`.
+#[tauri::command]
+fn proxy_base(proxy: tauri::State<'_, Arc<proxy::ProxyState>>) -> String {
+    format!("http://127.0.0.1:{}", proxy.port)
+}
+
 /// Append a source to the config file. Returns false if it was already there.
 #[tauri::command]
 async fn save_source(source: String) -> Result<bool, String> {
@@ -148,7 +154,7 @@ pub fn run() {
             app.manage(proxy);
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![startup_tracks, list_source, save_source])
+        .invoke_handler(tauri::generate_handler![startup_tracks, list_source, save_source, proxy_base])
         .run(tauri::generate_context!())
         .expect("error while running wamptube");
 }

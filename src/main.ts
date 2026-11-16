@@ -1,8 +1,21 @@
 /// <reference types="vite/client" />
 import Webamp from 'webamp';
+// Throwaway MSE spike (see src/spike.ts): VITE_SPIKE=1 deno task tauri dev
+if (import.meta.env.VITE_SPIKE) location.replace('/spike.html');
 import { invoke } from '@tauri-apps/api/core';
 import { getCurrentWindow, LogicalSize } from '@tauri-apps/api/window';
-import { patchTitleBar } from './titlebar';
+import { MseMedia, videoEl } from './msemedia';
+import {
+  VIDEO_STACK_FLOOR,
+  frameSize,
+  getFrameWidth,
+  isVideoOpen,
+  mountVideoWindow,
+  onVideoResize,
+  placeVideoWindow,
+  refreshGriplessSprite,
+  setFrameWidth,
+} from './videowindow';
 import {
   handleAddUrlEvent,
   handleTrackDropEvent,
@@ -79,10 +92,10 @@ function installDragHandler() {
       if (e.button !== 0) return;
       const target = e.target as HTMLElement | null;
       if (!target) return;
-      const bar = target.closest('#main-window #title-bar');
+      const bar = target.closest('#main-window #title-bar, .video-top');
       if (!bar) return;
       // leave the menu / minimize / shade / close buttons alone
-      if (target.closest('#option, #minimize, #shade, #close')) return;
+      if (target.closest('#option, #minimize, #shade, #close, #video-close')) return;
       e.preventDefault();
       e.stopPropagation();
       getCurrentWindow()
@@ -128,33 +141,57 @@ function stackLayout(state: any) {
   return { width, height, moves };
 }
 
+/** Set by installAutoLayout; lets the video window ask for a fresh layout. */
+let relayoutNow: () => void = () => {};
+
 let fittedKey = '';
+let lastStack = { width: 275, height: 348 };
 /**
- * Size #app (1x) and the Tauri window (scaled) to a stack of the given size.
- * #app has to match: on every window resize Webamp re-checks that its windows
- * fit inside the mount node and shoves them back in if not.
+ * Size #app (1x) to a stack of the given size, put the video window to its right
+ * when open, and size the Tauri window (scaled) to hold both. #app has to match
+ * the stack: on every window resize Webamp re-checks that its windows fit inside
+ * the mount node and shoves them back in if not.
  */
 function fitWindow(width: number, height: number): Promise<void> {
-  const key = `${width}x${height}`;
+  lastStack = { width, height };
+  const video = isVideoOpen();
+  const key = `${width}x${height}${video ? `v${getFrameWidth()}` : ''}`;
   if (key === fittedKey) return Promise.resolve();
   fittedKey = key;
   console.warn(`[layout] ${key} (x${UI_SCALE})`);
   const app = document.getElementById('app')!;
   app.style.width = `${width}px`;
   app.style.height = `${height}px`;
+  placeVideoWindow(width, height);
+  const frame = frameSize(height);
   return getCurrentWindow()
-    .setSize(new LogicalSize(width * UI_SCALE, height * UI_SCALE))
+    .setSize(
+      new LogicalSize(
+        (width + (video ? frame.w : 0)) * UI_SCALE,
+        Math.max(height, video ? frame.h : 0) * UI_SCALE,
+      ),
+    )
     .catch((e) => console.error('setSize failed', e));
 }
+
+const WAMPTUBE_SKIN = '/skins/wamptube.wsz';
+/** Set in main() once Webamp exists; used to answer the "Base skin" menu item. */
+let setBaseSkin: (() => void) | null = null;
 
 /**
  * Redux middleware for Webamp's `__customMiddlewares` option: hold the
  * playlist's width at the main window's when its resize handle is dragged,
- * since main and EQ can't be widened. Only its height changes.
+ * since main and EQ can't be widened. Only its height changes. Also redirects the
+ * "Base skin" menu item to our skin.
  */
 const resizeMiddleware = () => (next: (a: any) => any) => (action: any) => {
   if (action?.type === 'WINDOW_SIZE_CHANGED' && action.windowId === 'playlist') {
     action = { ...action, size: [0, action.size[1]] };
+  }
+  // "Base skin" in the skin menu would restore Webamp's stock art; load ours instead.
+  if (action?.type === 'LOAD_DEFAULT_SKIN' && setBaseSkin) {
+    setBaseSkin();
+    return;
   }
   return next(action);
 };
@@ -174,8 +211,32 @@ function installAutoLayout(webamp: Webamp) {
   };
   let scheduled = false;
 
+  /** Playlist segments (29 px each) needed so the stack reaches the video's minimum height. */
+  const minPlaylistSeg = (state: any) => {
+    const pl = state.windows.genWindows.playlist;
+    const { height } = stackLayout(state);
+    const others = height - windowPixelSize(pl, false).height;
+    return Math.max(0, Math.ceil((VIDEO_STACK_FLOOR - others - 116) / 29));
+  };
+  const playlistFlexible = (state: any) => {
+    const pl = state.windows.genWindows.playlist;
+    return !!pl?.open && !pl.shade;
+  };
+
   const relayout = () => {
     scheduled = false;
+    refreshGriplessSprite();
+    const state = store.getState();
+    // With the video window open, the playlist grows so the stack is tall enough
+    // for the picture (rather than leaving an empty box under a short stack).
+    if (isVideoOpen() && playlistFlexible(state)) {
+      const pl = state.windows.genWindows.playlist;
+      const need = minPlaylistSeg(state);
+      if (pl.size[1] < need) {
+        store.dispatch({ type: 'WINDOW_SIZE_CHANGED', windowId: 'playlist', size: [0, need] });
+        return; // the store change schedules another pass
+      }
+    }
     const { width, height, moves } = stackLayout(store.getState());
     if (height === 0) return;
     void fitWindow(width, height);
@@ -190,6 +251,28 @@ function installAutoLayout(webamp: Webamp) {
     queueMicrotask(relayout);
   };
   store.subscribe(schedule);
+  relayoutNow = schedule;
+
+  // The video window's bottom-right grip: horizontal drag sets the video frame's width,
+  // vertical drag changes the playlist's height (so the whole stack and frame).
+  let startSeg = 0;
+  let startW = 0;
+  onVideoResize((dx, dy, phase) => {
+    const state = store.getState();
+    if (phase === 'start') {
+      startSeg = state.windows.genWindows.playlist?.size[1] ?? 0;
+      startW = getFrameWidth();
+    }
+    if (phase !== 'move') return;
+    if (playlistFlexible(state)) {
+      const seg = Math.min(14, Math.max(minPlaylistSeg(state), startSeg + Math.round(dy / UI_SCALE / 29)));
+      if (seg !== state.windows.genWindows.playlist.size[1]) {
+        store.dispatch({ type: 'WINDOW_SIZE_CHANGED', windowId: 'playlist', size: [0, seg] });
+      }
+    }
+    setFrameWidth(startW + dx / UI_SCALE);
+    if (getFrameWidth() !== startW) schedule();
+  });
   relayout();
 }
 
@@ -266,6 +349,8 @@ async function main() {
 
   const webamp = new Webamp({
     initialTracks: tracks,
+    // Webamp's default art with WAMPTUBE lettering; built by tools/make-skin.ts
+    initialSkin: { url: WAMPTUBE_SKIN },
     windowLayout: {
       main: { position: { left: 0, top: 0 } },
       equalizer: { position: { left: 0, top: 116 } },
@@ -276,7 +361,11 @@ async function main() {
     handleTrackDropEvent: handleTrackDropEvent(notify),
     // private option in webamp 2.3.1; see resizeMiddleware
     __customMiddlewares: [resizeMiddleware],
+    // private option in webamp 2.3.1: video + audio through one MSE <video> element
+    __customMediaClass: MseMedia,
   } as any);
+
+  setBaseSkin = () => webamp.setSkinFromUrl(WAMPTUBE_SKIN);
 
   const inTauri = '__TAURI_INTERNALS__' in window;
   if (inTauri) {
@@ -314,11 +403,7 @@ async function main() {
   };
 
   await webamp.renderWhenReady(document.getElementById('app')!);
-  const patched = await patchTitleBar().catch((e) => {
-    console.error('[titlebar] patch failed', e);
-    return 0;
-  });
-  if (patched < 6) console.warn(`[titlebar] only ${patched}/6 title sprites patched`);
+  mountVideoWindow(document.getElementById('webamp')!, videoEl, () => relayoutNow());
   if (inTauri) installAutoLayout(webamp);
   installResizeScaling();
 

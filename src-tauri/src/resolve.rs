@@ -11,6 +11,15 @@ const YTDLP_TIMEOUT: Duration = Duration::from_secs(20);
 /// Listing a long playlist pages through it; give it longer than one resolve.
 const LIST_TIMEOUT: Duration = Duration::from_secs(60);
 const FORMAT: &str = "bestaudio[ext=m4a]/bestaudio";
+/// Video-only H.264 (WKWebView plays avc1 reliably; VP9/AV1 it does not).
+const FORMAT_VIDEO: &str = "bestvideo[vcodec^=avc1][height<=1080][ext=mp4]/bestvideo[vcodec^=avc1]";
+
+/// Which of a video's streams to resolve.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Kind {
+    Audio,
+    Video,
+}
 const FALLBACK_DIRS: &[&str] = &["/opt/homebrew/bin", "/usr/local/bin"];
 const DEFAULT_TTL_S: i64 = 6 * 60 * 60;
 
@@ -152,6 +161,7 @@ pub fn parse_ytdlp_json(video_id: &str, json: &str) -> Result<ResolvedTrack, Str
     let channel = as_string(root.get("channel")).or_else(|| as_string(root.get("uploader")));
     let codec = as_string(fmt.get("acodec"))
         .filter(|c| c != "none")
+        .or_else(|| as_string(fmt.get("vcodec")).filter(|c| c != "none"))
         .unwrap_or_else(|| "unknown".into());
     let expires_at = parse_expire(&upstream_url).unwrap_or_else(|| now_s() + DEFAULT_TTL_S);
 
@@ -213,12 +223,17 @@ async fn run_ytdlp(args: &[&str], timeout: Duration, what: &str) -> Result<Strin
 
 /// Run yt-dlp for `video_id` (validated here) with a hard timeout.
 pub async fn resolve(video_id: &str) -> Result<ResolvedTrack, String> {
+    resolve_kind(video_id, Kind::Audio).await
+}
+
+pub async fn resolve_kind(video_id: &str, kind: Kind) -> Result<ResolvedTrack, String> {
+    let format = if kind == Kind::Video { FORMAT_VIDEO } else { FORMAT };
     if !is_valid_video_id(video_id) {
         return Err(format!("Invalid video id: {video_id:?} (expected 11 chars of A-Z a-z 0-9 _ -)"));
     }
     let url = format!("https://www.youtube.com/watch?v={video_id}");
     let stdout = run_ytdlp(
-        &["-j", "--no-playlist", "--no-update", "-f", FORMAT, &url],
+        &["-j", "--no-playlist", "--no-update", "-f", format, &url],
         YTDLP_TIMEOUT,
         &format!("resolving {video_id}"),
     )
