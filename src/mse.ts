@@ -114,7 +114,7 @@ export class MseSession {
 
   /** `base` is the proxy origin, e.g. http://127.0.0.1:54321. Resolves once playable. */
   /** Returns false if a later `load` or `dispose` superseded this one. */
-  async load(base: string, videoId: string): Promise<boolean> {
+  async load(base: string, videoId: string, withVideo = true): Promise<boolean> {
     this.dispose();
     // Stop the previous video now: resolving the new one takes several seconds,
     // and the old picture and sound must not carry on under the new track.
@@ -125,7 +125,8 @@ export class MseSession {
     const alive = () => gen === this.gen;
     const [audio, video] = await Promise.all([
       loadTrack('audio', `${base}/v/${videoId}`, 'audio'),
-      loadTrack('video', `${base}/vv/${videoId}`, 'video'),
+      // With the video window off, skip the video stream entirely: audio only.
+      withVideo ? loadTrack('video', `${base}/vv/${videoId}`, 'video') : Promise.resolve(null),
     ]);
     if (!alive()) return false;
     const ms = new MediaSource();
@@ -133,10 +134,10 @@ export class MseSession {
     this.el.src = this.url;
     await new Promise((r) => ms.addEventListener('sourceopen', r, { once: true }));
     if (!alive()) return false;
-    const feeders = [new Feeder(audio, ms, this.el, alive), new Feeder(video, ms, this.el, alive)];
+    const feeders = [audio, video].filter((t): t is Track => t !== null).map((t) => new Feeder(t, ms, this.el, alive));
     await Promise.all(feeders.map((f) => f.start()));
     if (!alive()) return false;
-    ms.duration = Math.max(audio.duration, video.duration);
+    ms.duration = Math.max(audio.duration, video?.duration ?? 0);
     const pumpAll = () => feeders.forEach((f) => f.pump().catch((e) => alive() && console.error('[mse] pump', String(e))));
     this.el.addEventListener('seeking', pumpAll);
     this.timer = window.setInterval(pumpAll, 500);

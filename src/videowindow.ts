@@ -50,9 +50,23 @@ export function setVideoOpen(v: boolean) {
   open = v;
   if (frame) frame.style.display = v ? 'flex' : 'none';
   host?.classList.toggle('video-active', v);
+  viButton?.classList.toggle('on', v);
   onChange();
 }
 export const toggleVideo = () => setVideoOpen(!open);
+
+/** The VI button in the main window, where the mono/stereo lights were; lit while the video is on. */
+let viButton: HTMLElement | undefined;
+function installVideoButton() {
+  const main = document.getElementById('main-window');
+  if (!main || viButton) return;
+  viButton = div('vi-button');
+  viButton.title = 'Toggle Video (Alt+V)';
+  viButton.addEventListener('mousedown', (e) => e.stopPropagation()); // not a window drag
+  viButton.addEventListener('click', toggleVideo);
+  viButton.classList.toggle('on', open);
+  main.appendChild(viButton);
+}
 
 /** Build the window around `video` and add it to `host` (Webamp's #webamp). */
 export function mountVideoWindow(hostEl: HTMLElement, video: HTMLVideoElement, changed: () => void) {
@@ -105,6 +119,7 @@ export function mountVideoWindow(hostEl: HTMLElement, video: HTMLVideoElement, c
   host.appendChild(frame);
   host.classList.toggle('video-active', open);
   refreshGriplessSprite();
+  installVideoButton();
   document.addEventListener('keydown', (e) => {
     if (e.altKey && e.code === 'KeyV') { e.preventDefault(); toggleVideo(); }
   });
@@ -158,4 +173,26 @@ export function refreshGriplessSprite() {
     host!.classList.add('grip-patched'); // only now may the stylesheet swap the sprite in
   };
   img.src = src;
+}
+
+/**
+ * Add a "Video" check item under "Playlist Editor" in Webamp's right-click menu.
+ * Webamp has no API for extra items, so this watches for its menu portal
+ * (#webamp-context-menu, rebuilt on every open) and inserts a matching <li>.
+ */
+export function installVideoMenuItem() {
+  const addTo = (menu: Element) => {
+    const items = [...menu.querySelectorAll('li')];
+    const anchor = items.find((li) => li.textContent?.trim() === 'Playlist Editor');
+    if (!anchor || menu.querySelector('li.video-toggle')) return;
+    const li = anchor.cloneNode(false) as HTMLLIElement;
+    li.className = `video-toggle${open ? ' checked' : ''}`;
+    li.textContent = 'Video';
+    li.addEventListener('click', () => toggleVideo()); // Webamp's own click-away handler closes the menu
+    anchor.after(li);
+  };
+  new MutationObserver(() => {
+    const m = document.getElementById('webamp-context-menu');
+    if (m) addTo(m);
+  }).observe(document.body, { childList: true, subtree: true });
 }

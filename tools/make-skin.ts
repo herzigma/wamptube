@@ -294,5 +294,32 @@ const files = {
   'PLEDIT.BMP': bmp(pledit),
   'PLEDIT.TXT': new TextEncoder().encode(pleditTxt),
 };
+
+/**
+ * VI button art for the video toggle (not a Webamp sprite, so it isn't part of
+ * the skin): the EQ button's four sprites with the "EQ" letters redrawn as "VI".
+ * A 23x48 strip, top to bottom: off, on, off pressed, on pressed.
+ */
+function viButtons(): PNG {
+  const V = ['x.x', 'x.x', 'x.x', 'x.x', '.x.'], I = ['xxx', '.x.', '.x.', '.x.', 'xxx'];
+  const names = ['MAIN_EQ_BUTTON', 'MAIN_EQ_BUTTON_SELECTED', 'MAIN_EQ_BUTTON_DEPRESSED', 'MAIN_EQ_BUTTON_DEPRESSED_SELECTED'];
+  const out = new PNG({ width: 23, height: 12 * names.length });
+  names.forEach((n, k) => {
+    const src = imgs[n];
+    if (!src) throw new Error(`sprite ${n} not found in the webamp bundle`);
+    const px = new Px(src.width === 23 && src.height === 12 ? src : (() => { throw new Error(`${n}: unexpected size`); })());
+    const face = px.get(10, 2), ink = px.get(11, 3); // button face; the letters' ink colour
+    const e = px.clone();
+    for (let y = 3; y <= 7; y++) for (let x = 9; x <= 18; x++) e.put(x, y, face);
+    [[V, 10], [I, 14]].forEach(([g, x0]) => (g as string[]).forEach((row, r) => {
+      for (let i = 0; i < 3; i++) if (row[i] === 'x') e.put((x0 as number) + i, 3 + r, ink);
+    }));
+    PNG.bitblt(e.png, out, 0, 0, 23, 12, 0, 12 * k);
+  });
+  for (let i = 3; i < out.data.length; i += 4) out.data[i] = 255;
+  return out;
+}
+
 Deno.mkdirSync('public/skins', { recursive: true });
+Deno.writeFileSync('public/skins/vi-button.png', PNG.sync.write(viButtons()));
 Deno.writeFileSync('public/skins/wamptube.wsz', zipSync(files));
