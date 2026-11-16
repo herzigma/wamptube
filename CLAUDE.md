@@ -67,9 +67,10 @@ Two halves. The webview draws the UI and never contacts YouTube; the Rust core o
 - `src/addsource.ts` – Webamp's `handleAddUrlEvent` (ADD > URL, with a small input box) and
   `handleTrackDropEvent` (dropped links). Both call `list_source`, then `save_source`. Dropping
   works because `dragDropEnabled` is off in `tauri.conf.json`; Tauri would otherwise swallow the drop.
-- `src/titlebar.ts` – redraws the default skin's title-bar sprites at runtime so they read
-  WAMPTUBE instead of WINAMP. Default skin only; it skips with a warning if the sprite layout
-  doesn't match.
+- `public/skins/wamptube.wsz` – Webamp's default skin art with WAMPTUBE lettering (main title
+  bar; the playlist bar says PLAYLIST). Loaded as `initialSkin`, so a custom skin replaces it and
+  renders only what it contains. Generated and committed: after upgrading webamp, rebuild it with
+  `deno run -A tools/make-skin.ts` (reads the sprites out of the webamp bundle).
 - `src/style.css` – layout and the UI scale. `UI_SCALE` in `main.ts` drives a `--ui-scale` CSS
   variable applied as `transform: scale()` on `#webamp`.
 - `src-tauri/src/resolve.rs` – runs yt-dlp as a child process (no shell, validated ids, timeouts)

@@ -20,7 +20,7 @@ use axum::Router;
 use tokio::sync::{mpsc, RwLock};
 use tokio_stream::wrappers::ReceiverStream;
 
-use crate::resolve::{self, now_s, ResolvedTrack};
+use crate::resolve::{self, now_s, Kind, ResolvedTrack};
 
 /// Upstream request size. Bounded ranges up to ~10 MB were measured at full
 /// speed; 2 MiB keeps waste low when the webview abandons a response.
@@ -36,6 +36,7 @@ const AVAILABILITY_GRACE_S: i64 = 10;
 #[derive(Debug, Clone)]
 pub struct StreamEntry {
     pub video_id: String,
+    pub kind: Kind,
     pub upstream_url: String,
     pub headers: Vec<(String, String)>,
     /// Total size in bytes, from yt-dlp or learned from the first Content-Range.
@@ -67,15 +68,20 @@ impl ProxyState {
     }
 
     async fn insert(&self, track: &ResolvedTrack) -> String {
+        self.insert_kind(track, Kind::Audio).await
+    }
+
+    async fn insert_kind(&self, track: &ResolvedTrack, kind: Kind) -> String {
         let token = format!("{}{}", uuid::Uuid::new_v4().simple(), uuid::Uuid::new_v4().simple());
         self.by_video
             .write()
             .await
-            .insert(track.video_id.clone(), token.clone());
+            .insert(key(&track.video_id, kind), token.clone());
         self.tokens.write().await.insert(
             token.clone(),
             StreamEntry {
                 video_id: track.video_id.clone(),
+                kind,
                 upstream_url: track.upstream_url.clone(),
                 headers: track.headers.clone(),
                 size: track.size_bytes,
@@ -100,34 +106,35 @@ impl ProxyState {
     /// The resolve runs in its own task: WebKit often cancels the first request
     /// for a new track and retries, and the yt-dlp run must survive that rather
     /// than be killed and started over.
-    async fn token_for_video(self: &Arc<Self>, video_id: &str) -> Result<String, String> {
-        if let Some(t) = self.by_video.read().await.get(video_id) {
+    async fn token_for_video(self: &Arc<Self>, video_id: &str, kind: Kind) -> Result<String, String> {
+        if let Some(t) = self.by_video.read().await.get(&key(video_id, kind)) {
             return Ok(t.clone());
         }
         let (st, id) = (self.clone(), video_id.to_string());
-        tokio::spawn(async move { st.resolve_video(&id).await })
+        tokio::spawn(async move { st.resolve_video(&id, kind).await })
             .await
             .map_err(|e| format!("resolve task failed: {e}"))?
     }
 
-    async fn resolve_video(&self, video_id: &str) -> Result<String, String> {
-        if let Some(t) = self.by_video.read().await.get(video_id) {
+    async fn resolve_video(&self, video_id: &str, kind: Kind) -> Result<String, String> {
+        let k = key(video_id, kind);
+        if let Some(t) = self.by_video.read().await.get(&k) {
             return Ok(t.clone());
         }
         let _guard = self.resolve_lock.lock().await;
-        if let Some(t) = self.by_video.read().await.get(video_id) {
+        if let Some(t) = self.by_video.read().await.get(&k) {
             return Ok(t.clone()); // resolved while we waited
         }
-        if let Some((at, msg)) = self.failed.read().await.get(video_id) {
+        if let Some((at, msg)) = self.failed.read().await.get(&k) {
             if now_s() - at < RERESOLVE_MIN_GAP_S {
                 return Err(msg.clone());
             }
         }
-        eprintln!("[proxy] resolving {video_id} on first request");
-        match resolve::resolve(video_id).await {
+        eprintln!("[proxy] resolving {video_id} ({kind:?}) on first request");
+        match resolve::resolve_kind(video_id, kind).await {
             Ok(track) => {
-                self.failed.write().await.remove(video_id);
-                let token = self.insert(&track).await;
+                self.failed.write().await.remove(&k);
+                let token = self.insert_kind(&track, kind).await;
                 eprintln!(
                     "[resolve] {video_id} -> {} | {} {:?}kbps {:?}Hz {}s | token {}",
                     track.title, track.codec, track.bitrate_kbps, track.sample_rate_hz, track.duration_s,
@@ -136,7 +143,7 @@ impl ProxyState {
                 Ok(token)
             }
             Err(e) => {
-                self.failed.write().await.insert(video_id.to_string(), (now_s(), e.clone()));
+                self.failed.write().await.insert(k.clone(), (now_s(), e.clone()));
                 Err(e)
             }
         }
@@ -180,6 +187,7 @@ pub async fn start() -> std::io::Result<Arc<ProxyState>> {
     let app = Router::new()
         .route("/stream/{token}", any(stream_handler))
         .route("/v/{video_id}", any(video_handler))
+        .route("/vv/{video_id}", any(video_only_handler))
         .with_state(state.clone());
     tokio::spawn(async move {
         if let Err(e) = axum::serve(listener, app).await {
@@ -188,6 +196,13 @@ pub async fn start() -> std::io::Result<Arc<ProxyState>> {
     });
     eprintln!("[proxy] listening on http://127.0.0.1:{port}");
     Ok(state)
+}
+
+fn key(video_id: &str, kind: Kind) -> String {
+    match kind {
+        Kind::Audio => video_id.to_string(),
+        Kind::Video => format!("{video_id}#v"),
+    }
 }
 
 fn short(token: &str) -> &str {
@@ -281,7 +296,7 @@ async fn upstream_get(
         return Ok(resp);
     }
     eprintln!("[proxy] {} {range} upstream 403, re-resolving {}", short(token), entry.video_id);
-    let track = resolve::resolve(&entry.video_id)
+    let track = resolve::resolve_kind(&entry.video_id, entry.kind)
         .await
         .map_err(|e| format!("upstream expired and re-resolve failed: {e}"))?;
     if let Some(e) = st.tokens.write().await.get_mut(token) {
@@ -345,13 +360,27 @@ async fn video_handler(
     method: Method,
     req_headers: HeaderMap,
 ) -> Response {
+    lazy_handler(st, video_id, Kind::Audio, method, req_headers).await
+}
+
+/// `/vv/{video_id}`: the same, for the video-only (H.264) stream.
+async fn video_only_handler(
+    State(st): State<Arc<ProxyState>>,
+    Path(video_id): Path<String>,
+    method: Method,
+    req_headers: HeaderMap,
+) -> Response {
+    lazy_handler(st, video_id, Kind::Video, method, req_headers).await
+}
+
+async fn lazy_handler(st: Arc<ProxyState>, video_id: String, kind: Kind, method: Method, req_headers: HeaderMap) -> Response {
     if method == Method::OPTIONS {
         return serve(st, video_id, method, req_headers).await;
     }
     if !resolve::is_valid_video_id(&video_id) {
         return simple(StatusCode::NOT_FOUND, "invalid video id");
     }
-    match st.token_for_video(&video_id).await {
+    match st.token_for_video(&video_id, kind).await {
         Ok(token) => serve(st, token, method, req_headers).await,
         Err(e) => {
             eprintln!("[proxy] {method} /v/{video_id} -> 502 resolve failed: {e}");

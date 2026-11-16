@@ -1,0 +1,107 @@
+// Webamp's media engine replaced by one backed by a <video> element and MSE
+// (webamp option `__customMediaClass`, private in 2.3.1; the interface is
+// IMedia in webamp/built/types/js/media/index.d.ts). Audio plays straight from
+// the element, so the equalizer, preamp, balance and visualizer do nothing
+// while this engine is in use; volume works.
+import { invoke } from '@tauri-apps/api/core';
+import { MseSession } from './mse';
+
+type Cb = (...a: unknown[]) => void;
+const STOPPED = 0, PLAYING = 1, PAUSED = 2;
+
+/** The element the picture shows on; main.ts puts it on screen. */
+export const videoEl = document.createElement('video');
+videoEl.id = 'video-pane';
+videoEl.playsInline = true;
+
+export class MseMedia {
+  private handlers = new Map<string, Cb[]>();
+  private session = new MseSession(videoEl);
+  private status = STOPPED;
+  private analyser: AnalyserNode | undefined;
+  private off: Array<() => void> = [];
+
+  constructor() {
+    const listen = (ev: string, fn: () => void) => {
+      videoEl.addEventListener(ev, fn);
+      this.off.push(() => videoEl.removeEventListener(ev, fn));
+    };
+    listen('timeupdate', () => this.emit('timeupdate'));
+    listen('durationchange', () => this.emit('fileLoaded'));
+    listen('ended', () => { this.setStatus(STOPPED); this.emit('ended'); });
+    listen('error', () => {
+      console.error('[mse] element error', videoEl.error?.code, videoEl.error?.message);
+      this.setStatus(STOPPED);
+      this.emit('ended'); // like Webamp: don't get stuck, act as if the track ended
+    });
+  }
+
+  private emit(ev: string) { this.handlers.get(ev)?.forEach((cb) => cb()); }
+  private setStatus(s: number) {
+    this.status = s;
+    if (s === PLAYING) this.emit('playing');
+    this.emit('timeupdate');
+  }
+
+  on(event: string, cb: Cb) {
+    this.handlers.set(event, [...(this.handlers.get(event) ?? []), cb]);
+  }
+
+  duration() { const d = videoEl.duration; return Number.isFinite(d) ? d : 0; }
+  timeElapsed() { return videoEl.currentTime; }
+
+  async play() {
+    if (this.status !== PAUSED) this.seekToTime(0);
+    try { await videoEl.play(); } catch { /* the element reports it through 'error' */ }
+    this.setStatus(PLAYING);
+  }
+  pause() { videoEl.pause(); this.setStatus(PAUSED); }
+  stop() { videoEl.pause(); videoEl.currentTime = 0; this.setStatus(STOPPED); }
+  seekToTime(t: number) {
+    videoEl.currentTime = Math.min(Math.max(t, 0), this.duration());
+    this.emit('timeupdate');
+  }
+  seekToPercentComplete(percent: number) { this.seekToTime(this.duration() * (percent / 100)); }
+
+  setVolume(v: number) { videoEl.volume = Math.min(Math.max(v / 100, 0), 1); }
+  setBalance(_: number) {}
+  setPreamp(_: number) {}
+  setEqBand(_band: number, _value: number) {}
+  disableEq() {}
+  enableEq() {}
+  /** Not connected to anything: the visualizer shows silence. */
+  getAnalyser(): AnalyserNode {
+    this.analyser ??= new AudioContext().createAnalyser();
+    return this.analyser;
+  }
+
+  async loadFromUrl(url: string, autoPlay: boolean) {
+    const m = /^(https?:\/\/127\.0\.0\.1:\d+)\/v\/([A-Za-z0-9_-]{11})$/.exec(url);
+    if (!m) { console.error('[mse] not a proxy /v/ url:', url); return; }
+    console.warn(`[mse] load ${m[2]} autoPlay=${autoPlay}`);
+    this.emit('waiting');
+    this.status = STOPPED;
+    let current: boolean;
+    try {
+      current = await this.session.load(m[1], m[2]);
+    } catch (e) {
+      console.error('[mse] load failed', String((e as Error)?.message ?? e));
+      this.emit('stopWaiting');
+      this.emit('ended');
+      return;
+    }
+    console.warn(`[mse] ${m[2]} ${current ? 'ready' : 'superseded'}`);
+    if (!current) return; // a newer track was requested meanwhile; it owns the UI state now
+    this.emit('stopWaiting');
+    if (autoPlay) void this.play();
+  }
+
+  dispose() {
+    this.session.dispose();
+    this.off.forEach((f) => f());
+    this.pause();
+  }
+}
+
+/** Proxy origin, kept so other modules can use it. */
+export const proxyBase = () => invoke<string>('proxy_base');

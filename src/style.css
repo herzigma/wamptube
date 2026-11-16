@@ -72,3 +72,6 @@ html, body {
   font: inherit; color: #ddd; background: #3c3c4c; border: 1px solid #5a5a6e;
   padding: 0 calc(4px * var(--ui-scale)); cursor: pointer;
 }
+
+/* Video pane (src/msemedia.ts), to the right of the Webamp stack; main.ts sets left/width/height. */
+#video-pane { position: absolute; top: 0; background: #000; object-fit: contain; }

@@ -140,6 +140,28 @@ which runs the full resolve on the first request for that video.
 - CSP is explicit. Milkdrop/butterchurn would need `'unsafe-eval'` in `script-src`; it is not enabled.
 - Versions: tauri 2.12.5, axum 0.8.9, reqwest 0.13.5, webamp 2.3.1, vite 8.3.8, typescript 7.0.2.
 
+## Spike: video through MSE (branch `spike/mse-video`, 2026-11-15)
+
+`VITE_SPIKE=1 deno task tauri dev` opens `spike.html` (`src/spike.ts`): one `<video>` fed by two
+MSE SourceBuffers, H.264 video-only (`/vv/{id}` on the proxy) plus the AAC audio (`/v/{id}`),
+using each stream's `sidx` for segment offsets. Test video `Hf20ZzMRs-I`, in the real WKWebView:
+
+- MSE accepts `avc1.640028` + `mp4a.40.2` fragmented MP4 from YouTube as is. 1920x1080, 0 dropped frames.
+- **Duration is correct** (334.53 s vs the real 334.5 s). The doubled duration of problem 1 does
+  not occur under MSE, so engine A through MSE would fix it without ffmpeg.
+- Seeks near and far (60 s, 267 s, back to 5 s) land on target and keep playing; pause holds position.
+- One element means one clock: no A/V drift handling needed.
+- Audio is audible (confirmed by ear).
+
+Wired into the player: `src/mse.ts` is the engine, `src/msemedia.ts` is an `IMedia` class passed as
+Webamp's `__customMediaClass`, and `main.ts` puts the shared `<video>` in a 480x270 pane to the
+right of the Webamp stack (window width grows by that). Play, pause, seek, volume and track
+changes go through Webamp as before. While this engine is in use the EQ, preamp, balance and
+visualizer do nothing (audio plays straight from the element). Startup loads track 1 through it
+without errors; clicking through playback is not yet checked. Known gaps: the video buffer is
+never trimmed (memory grows over a long track), each track now costs a second yt-dlp resolve
+(the video stream), and `VITE_SELFTEST` still targets Webamp's old `<audio>` element.
+
 ## Engine decision
 
 Not final. Engine A decodes and plays AAC in WKWebView without codec trouble, but the doubled

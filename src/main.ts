@@ -1,8 +1,10 @@
 /// <reference types="vite/client" />
 import Webamp from 'webamp';
+// Throwaway MSE spike (see src/spike.ts): VITE_SPIKE=1 deno task tauri dev
+if (import.meta.env.VITE_SPIKE) location.replace('/spike.html');
 import { invoke } from '@tauri-apps/api/core';
 import { getCurrentWindow, LogicalSize } from '@tauri-apps/api/window';
-import { patchTitleBar } from './titlebar';
+import { MseMedia, videoEl } from './msemedia';
 import {
   handleAddUrlEvent,
   handleTrackDropEvent,
@@ -128,11 +130,16 @@ function stackLayout(state: any) {
   return { width, height, moves };
 }
 
+/** 1x width of the video pane to the right of the Webamp stack; it is 16:9. */
+const VIDEO_W = 480;
+const VIDEO_H = (VIDEO_W * 9) / 16;
+
 let fittedKey = '';
 /**
- * Size #app (1x) and the Tauri window (scaled) to a stack of the given size.
- * #app has to match: on every window resize Webamp re-checks that its windows
- * fit inside the mount node and shoves them back in if not.
+ * Size #app (1x) to a stack of the given size, put the video pane to its right,
+ * and size the Tauri window (scaled) to hold both. #app has to match the stack:
+ * on every window resize Webamp re-checks that its windows fit inside the mount
+ * node and shoves them back in if not.
  */
 function fitWindow(width: number, height: number): Promise<void> {
   const key = `${width}x${height}`;
@@ -142,19 +149,32 @@ function fitWindow(width: number, height: number): Promise<void> {
   const app = document.getElementById('app')!;
   app.style.width = `${width}px`;
   app.style.height = `${height}px`;
+  videoEl.style.left = `${width * UI_SCALE}px`;
+  videoEl.style.width = `${VIDEO_W * UI_SCALE}px`;
+  videoEl.style.height = `${VIDEO_H * UI_SCALE}px`;
   return getCurrentWindow()
-    .setSize(new LogicalSize(width * UI_SCALE, height * UI_SCALE))
+    .setSize(new LogicalSize((width + VIDEO_W) * UI_SCALE, Math.max(height, VIDEO_H) * UI_SCALE))
     .catch((e) => console.error('setSize failed', e));
 }
+
+const WAMPTUBE_SKIN = '/skins/wamptube.wsz';
+/** Set in main() once Webamp exists; used to answer the "Base skin" menu item. */
+let setBaseSkin: (() => void) | null = null;
 
 /**
  * Redux middleware for Webamp's `__customMiddlewares` option: hold the
  * playlist's width at the main window's when its resize handle is dragged,
- * since main and EQ can't be widened. Only its height changes.
+ * since main and EQ can't be widened. Only its height changes. Also redirects the
+ * "Base skin" menu item to our skin.
  */
 const resizeMiddleware = () => (next: (a: any) => any) => (action: any) => {
   if (action?.type === 'WINDOW_SIZE_CHANGED' && action.windowId === 'playlist') {
     action = { ...action, size: [0, action.size[1]] };
+  }
+  // "Base skin" in the skin menu would restore Webamp's stock art; load ours instead.
+  if (action?.type === 'LOAD_DEFAULT_SKIN' && setBaseSkin) {
+    setBaseSkin();
+    return;
   }
   return next(action);
 };
@@ -266,6 +286,8 @@ async function main() {
 
   const webamp = new Webamp({
     initialTracks: tracks,
+    // Webamp's default art with WAMPTUBE lettering; built by tools/make-skin.ts
+    initialSkin: { url: WAMPTUBE_SKIN },
     windowLayout: {
       main: { position: { left: 0, top: 0 } },
       equalizer: { position: { left: 0, top: 116 } },
@@ -276,7 +298,11 @@ async function main() {
     handleTrackDropEvent: handleTrackDropEvent(notify),
     // private option in webamp 2.3.1; see resizeMiddleware
     __customMiddlewares: [resizeMiddleware],
+    // private option in webamp 2.3.1: video + audio through one MSE <video> element
+    __customMediaClass: MseMedia,
   } as any);
+
+  setBaseSkin = () => webamp.setSkinFromUrl(WAMPTUBE_SKIN);
 
   const inTauri = '__TAURI_INTERNALS__' in window;
   if (inTauri) {
@@ -313,12 +339,8 @@ async function main() {
     return p;
   };
 
+  document.body.appendChild(videoEl);
   await webamp.renderWhenReady(document.getElementById('app')!);
-  const patched = await patchTitleBar().catch((e) => {
-    console.error('[titlebar] patch failed', e);
-    return 0;
-  });
-  if (patched < 6) console.warn(`[titlebar] only ${patched}/6 title sprites patched`);
   if (inTauri) installAutoLayout(webamp);
   installResizeScaling();
 

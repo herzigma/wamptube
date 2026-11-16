@@ -3,6 +3,8 @@
   "specifiers": {
     "npm:@tauri-apps/api@^2.12.4": "2.12.4",
     "npm:@tauri-apps/cli@^2.12.4": "2.12.4",
+    "npm:fflate@~0.8.3": "0.8.3",
+    "npm:pngjs@7": "7.0.0",
     "npm:typescript@^7.0.2": "7.0.2",
     "npm:vite@^8.3.8": "8.3.8",
     "npm:webamp@^2.3.1": "2.3.1"
@@ -318,6 +320,9 @@
         "picomatch"
       ]
     },
+    "fflate@0.8.3": {
+      "integrity": "sha512-tbZNuJrLwGUp3zshBtdy4W+ORxZuIh8a5ilyIEQDC5rY1f3U20JMry0Ll3WBzU58EZKsEuJFXhb5gwv8CsPvgA=="
+    },
     "fsevents@2.3.3": {
       "integrity": "sha512-5xoDfX+fL7faATnagmWPpbFtwh/R77WmMMqqHGS65C3vvB0YHrgF+B1YmZ3441tMj5n63k0212XNoJwzlhffQw==",
       "os": ["darwin"],
@@ -406,6 +411,9 @@
     },
     "picomatch@4.0.7": {
       "integrity": "sha512-qcJu88Q2IWqJsDD529JKMdwGm/dvInW4HvQnRwiH9JtihJvzGOscDtHE3x1pBKeUOTysQ8kVmLnJ2kJu7yhcGA=="
+    },
+    "pngjs@7.0.0": {
+      "integrity": "sha512-LKWqWJRhstyYo9pGvgor/ivk2w94eSjE3RGVuzLGlr3NmD8bf7RcYGze1mNdEHRP6TRP6rMuDHk5t44hnTRyow=="
     },
     "postcss@8.5.33": {
       "integrity": "sha512-RVHEU9/Pp1Fnjr/MpAJsZoADukCKhfIi15OunEYiGktIkYLkPVvC1sioWolGDS7XByMTx9m/IGbro0Js13zhnQ==",
@@ -503,6 +511,8 @@
       "dependencies": [
         "npm:@tauri-apps/api@^2.12.4",
         "npm:@tauri-apps/cli@^2.12.4",
+        "npm:fflate@~0.8.3",
+        "npm:pngjs@7",
         "npm:typescript@^7.0.2",
         "npm:vite@^8.3.8",
         "npm:webamp@^2.3.1"
