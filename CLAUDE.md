@@ -64,6 +64,11 @@ Two halves. The webview draws the UI and never contacts YouTube; the Rust core o
 - `src/main.ts` – loads tracks via `startup_tracks` (or the test ids under `VITE_SELFTEST`), builds
   Webamp, positions the three Webamp windows with `windowLayout`, wires window dragging /
   close / minimize to Tauri, and holds the self-test code.
+- `src/throbber.ts` – buffering indicator: the Winamp bolt logo pulses (fixed size, hard steps, muted)
+  while a track loads or the video element stalls. `msemedia.ts` calls `setBuffering`. The frames are
+  cut at runtime from the active skin's main background at the logo's spot (`X,Y,W,H`), so a custom skin
+  whose artwork differs there gets a pulse on that artwork, or nothing if the area is flat. Not yet
+  skin-aware beyond that.
 - `src/addsource.ts` – Webamp's `handleAddUrlEvent` (ADD > URL, with a small input box) and
   `handleTrackDropEvent` (dropped links). Both call `list_source`, then `save_source`. Dropping
   works because `dragDropEnabled` is off in `tauri.conf.json`; Tauri would otherwise swallow the drop.

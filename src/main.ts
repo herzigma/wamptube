@@ -5,6 +5,7 @@ if (import.meta.env.VITE_SPIKE) location.replace('/spike.html');
 import { invoke } from '@tauri-apps/api/core';
 import { getCurrentWindow, LogicalSize } from '@tauri-apps/api/window';
 import { MseMedia, videoEl } from './msemedia';
+import { installThrobber } from './throbber';
 import {
   VIDEO_STACK_FLOOR,
   frameSize,
@@ -406,6 +407,7 @@ async function main() {
   await webamp.renderWhenReady(document.getElementById('app')!);
   mountVideoWindow(document.getElementById('webamp')!, videoEl, () => relayoutNow());
   installVideoMenuItem();
+  installThrobber();
   if (inTauri) installAutoLayout(webamp);
   installResizeScaling();
 

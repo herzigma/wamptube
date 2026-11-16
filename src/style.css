@@ -101,3 +101,16 @@ html, body {
 #main-window .vi-button:active { background-position: 0 -24px; }
 #main-window .vi-button.on:active { background-position: 0 -36px; }
 #main-window.shade .vi-button { display: none; }
+
+/*
+ * Buffering throbber (src/throbber.ts): a canvas drawn over the Winamp logo
+ * (about 16x18 at 250,89 in the skin's main background, where Webamp's #about link
+ * sits; the canvas adds a margin). It repaints just the bolt's pixels, same size,
+ * stepping brighter and back.
+ */
+#main-window .throbber {
+  display: none; position: absolute; left: 249px; top: 88px; width: 19px; height: 19px;
+  pointer-events: none; image-rendering: pixelated;
+}
+#main-window .throbber.on { display: block; }
+#main-window.shade .throbber { display: none; }
