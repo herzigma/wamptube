@@ -55,6 +55,6 @@ jobs:
       - name: Clippy
         working-directory: src-tauri
         run: cargo clippy --all-targets -- -D warnings
-      - name: Rust tests (offline: unit tests and proxy against a fake upstream)
+      - name: "Rust tests (offline: unit tests and proxy against a fake upstream)"
         working-directory: src-tauri
         run: cargo test
