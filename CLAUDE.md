@@ -91,6 +91,13 @@ Two halves. The webview draws the UI and never contacts YouTube; the Rust core o
   bar; the playlist bar says PLAYLIST). Loaded as `initialSkin`, so a custom skin replaces it and
   renders only what it contains. Generated and committed: after upgrading webamp, rebuild it with
   `deno run -A tools/make-skin.ts` (reads the sprites out of the webamp bundle).
+- `src/output.ts` – the "Output device" submenu, added to Webamp's main (Winamp logo) menu by
+  DOM injection when it opens (Webamp has no menu API). Moves playback with `setSinkId` on the one
+  media element and keeps the choice by device name in localStorage. WebView2 only: WKWebView has
+  no `setSinkId`, so macOS never shows it.
+- `src-tauri/src/audio_out.rs` – Windows: grants the app's own origins microphone permission through
+  WebView2's profile API at startup, because Chromium hides output-device names and ids without it.
+  Nothing calls getUserMedia; the grant only unlocks `enumerateDevices`.
 - `src/style.css` – layout and the UI scale. `UI_SCALE` in `main.ts` drives a `--ui-scale` CSS
   variable applied as `transform: scale()` on `#webamp`.
 - `src-tauri/src/resolve.rs` – runs yt-dlp as a child process (no shell, validated ids, timeouts)

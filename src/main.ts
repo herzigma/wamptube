@@ -7,6 +7,7 @@ import { getCurrentWindow, LogicalSize } from '@tauri-apps/api/window';
 import { MseMedia, fxAudio, videoEl } from './msemedia';
 import { demoSource } from './fx';
 import { installThrobber } from './throbber';
+import { installOutputMenu } from './output';
 import {
   VIDEO_STACK_FLOOR,
   frameSize,
@@ -369,6 +370,7 @@ async function main() {
   } as any);
 
   setBaseSkin = () => webamp.setSkinFromUrl(WAMPTUBE_SKIN);
+  installOutputMenu(videoEl);
 
   const inTauri = '__TAURI_INTERNALS__' in window;
   if (inTauri) {

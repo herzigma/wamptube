@@ -195,5 +195,11 @@ Windows 10 x64, Edge WebView2 (Chromium), yt-dlp 2026.10.26 and deno 2.9.8 from 
   a Windows problem.
 - **Durations are correct** (1197 s, 335 s, 2696 s). WebView2 does not have problem 1's doubled
   duration, which supports reading that problem as WKWebView-specific.
+- **Krisp Speaker as the system default output** made playback faint and warbly ("a radio
+  going in and out"). The element's own output (captured with `captureStream`) matched YouTube's
+  audio within ~1 dB, so the damage was downstream: Krisp's speaker-side noise cancellation.
+  Browsers had their own per-app device, wamptube got the default. Fixed by letting the user pick
+  the output device (`src/output.ts`); `setSinkId` moves the session, which Windows' audio session
+  list confirms.
 - Changes needed: yt-dlp lookup (`yt-dlp.exe`, no Unix permission check, Scoop and WinGet dirs),
   `CREATE_NO_WINDOW` on the child, `USERPROFILE` when `HOME` is unset, and an `icon.ico`.

@@ -4425,6 +4425,8 @@ dependencies = [
  "tokio-stream",
  "toml_edit 0.22.27",
  "uuid",
+ "webview2-com",
+ "windows-core",
 ]
 
 [[package]]

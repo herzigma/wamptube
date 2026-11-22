@@ -1,3 +1,4 @@
+pub mod audio_out;
 pub mod config;
 pub mod proxy;
 pub mod resolve;
@@ -152,6 +153,7 @@ pub fn run() {
         .setup(|app| {
             let proxy = tauri::async_runtime::block_on(proxy::start())?;
             app.manage(proxy);
+            audio_out::allow_device_list(app);
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![startup_tracks, list_source, save_source, proxy_base])
