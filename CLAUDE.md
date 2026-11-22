@@ -57,6 +57,11 @@ months old can resolve URLs that then refuse to play. Deno does double duty: it 
 toolchain, and yt-dlp finds it on PATH at runtime to solve YouTube's JS challenges (in Deno's
 sandbox, which is why we don't point yt-dlp at another runtime). ffmpeg is not used.
 
+Windows also works (WebView2, a Chromium engine, instead of WKWebView). yt-dlp and deno come from
+winget or Scoop; `resolve.rs` also looks in the Scoop shims and WinGet links dirs, spawns yt-dlp
+with `CREATE_NO_WINDOW` so no console flashes, and the config's `~` is `USERPROFILE` when
+`HOME` is unset. CI builds and tests on both macOS and Windows.
+
 ## Architecture
 
 Two halves. The webview draws the UI and never contacts YouTube; the Rust core owns everything else.

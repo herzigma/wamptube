@@ -20,8 +20,35 @@ pub enum Kind {
     Audio,
     Video,
 }
-const FALLBACK_DIRS: &[&str] = &["/opt/homebrew/bin", "/usr/local/bin"];
 const DEFAULT_TTL_S: i64 = 6 * 60 * 60;
+
+#[cfg(windows)]
+const YTDLP_BIN: &str = "yt-dlp.exe";
+#[cfg(not(windows))]
+const YTDLP_BIN: &str = "yt-dlp";
+
+/// Where package managers put yt-dlp and deno when a GUI app's PATH may not
+/// include them: Homebrew on macOS; Scoop shims and WinGet links on Windows.
+fn fallback_dirs() -> Vec<PathBuf> {
+    #[cfg(windows)]
+    {
+        let mut dirs = vec![];
+        if let Some(home) = std::env::var_os("USERPROFILE") {
+            dirs.push(PathBuf::from(home).join("scoop").join("shims"));
+        }
+        if let Some(local) = std::env::var_os("LOCALAPPDATA") {
+            dirs.push(PathBuf::from(local).join("Microsoft").join("WinGet").join("Links"));
+        }
+        dirs
+    }
+    #[cfg(not(windows))]
+    {
+        ["/opt/homebrew/bin", "/usr/local/bin", "/usr/bin", "/bin"]
+            .iter()
+            .map(PathBuf::from)
+            .collect()
+    }
+}
 
 /// Everything we learned about one video's chosen audio format.
 #[derive(Debug, Clone)]
@@ -51,6 +78,12 @@ pub fn is_valid_video_id(id: &str) -> bool {
             .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
 }
 
+#[cfg(windows)]
+fn is_executable(p: &Path) -> bool {
+    p.is_file()
+}
+
+#[cfg(not(windows))]
 fn is_executable(p: &Path) -> bool {
     use std::os::unix::fs::PermissionsExt;
     std::fs::metadata(p)
@@ -70,19 +103,18 @@ fn find_ytdlp() -> Option<PathBuf> {
         .unwrap_or_default();
     path_dirs
         .into_iter()
-        .chain(FALLBACK_DIRS.iter().map(PathBuf::from))
-        .map(|d| d.join("yt-dlp"))
+        .chain(fallback_dirs())
+        .map(|d| d.join(YTDLP_BIN))
         .find(|p| is_executable(p))
 }
 
-/// PATH for the child: the inherited PATH plus the Homebrew dirs, so yt-dlp
-/// can find a JS runtime (deno) even when launched from a GUI app.
+/// PATH for the child: the inherited PATH plus the package-manager dirs, so
+/// yt-dlp can find a JS runtime (deno) even when launched from a GUI app.
 fn child_path() -> std::ffi::OsString {
     let mut dirs: Vec<PathBuf> = std::env::var_os("PATH")
         .map(|p| std::env::split_paths(&p).collect())
         .unwrap_or_default();
-    for d in FALLBACK_DIRS.iter().chain(["/usr/bin", "/bin"].iter()) {
-        let d = PathBuf::from(d);
+    for d in fallback_dirs() {
         if !dirs.contains(&d) {
             dirs.push(d);
         }
@@ -188,9 +220,21 @@ pub fn parse_ytdlp_json(video_id: &str, json: &str) -> Result<ResolvedTrack, Str
 /// echoed with a `[yt-dlp]` prefix. `what` names the job in error messages.
 async fn run_ytdlp(args: &[&str], timeout: Duration, what: &str) -> Result<String, String> {
     let ytdlp = find_ytdlp().ok_or_else(|| {
-        "yt-dlp not found (looked on PATH, /opt/homebrew/bin, /usr/local/bin). Install it with `brew install yt-dlp`.".to_string()
+        if cfg!(windows) {
+            "yt-dlp not found (looked on PATH, Scoop shims, WinGet links). Install it with `winget install yt-dlp.yt-dlp DenoLand.Deno` or `scoop install yt-dlp deno`.".to_string()
+        } else {
+            "yt-dlp not found (looked on PATH, /opt/homebrew/bin, /usr/local/bin). Install it with `brew install yt-dlp`.".to_string()
+        }
     })?;
-    let child = Command::new(&ytdlp)
+    let mut cmd = Command::new(&ytdlp);
+    // A GUI app spawning a console program gets a console window flashing up
+    // on every resolve unless told not to.
+    #[cfg(windows)]
+    {
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        cmd.creation_flags(CREATE_NO_WINDOW);
+    }
+    let child = cmd
         .args(args)
         .env("PATH", child_path())
         .stdin(Stdio::null())
