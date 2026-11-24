@@ -203,3 +203,37 @@ Windows 10 x64, Edge WebView2 (Chromium), yt-dlp 2026.10.26 and deno 2.9.8 from 
   list confirms.
 - Changes needed: yt-dlp lookup (`yt-dlp.exe`, no Unix permission check, Scoop and WinGet dirs),
   `CREATE_NO_WINDOW` on the child, `USERPROFILE` when `HOME` is unset, and an `icon.ico`.
+
+## Spike: Sonos output (2026-11-24)
+
+`src-tauri/src/sonos.rs` (discovery, group topology, transport and volume over Sonos's local UPnP
+on port 1400) and `tests/live_sonos.rs`, which plays one track on a real speaker:
+`cargo test --test live_sonos -- --ignored --nocapture`, with `WAMPTUBE_SONOS_ROOM` to pick a
+room and `WAMPTUBE_SONOS_IP` to skip discovery. The test caps volume at 20 and restores it.
+Windows 10, five speakers on S2 (Play:1, Play:3, Playbar, Connect:Amp); passed on Kitchen
+Ceiling (Connect:Amp) and Office/Attic (Play:3).
+
+- **Sonos plays YouTube's fragmented m4a (itag 140, AAC) as is** from the plain
+  `/stream/{token}` URL with `Content-Type: audio/mp4`. No remux, no extension needed (the `.m4a`
+  suffix the proxy now accepts was never tried). Starts in about 1 s.
+- **Seek, volume, pause and resume work.** `Seek REL_TIME` to 13:18 landed and played within 3 s.
+- **The speaker reports `TrackDuration` 0:00:00** even with a duration in the DIDL metadata
+  (likely because the fragmented file has no overall duration). `RelTime` is right. Use yt-dlp's
+  duration for the time display.
+- **Sonos reads in 6 KB ranges**, while playing and while seeking. To seek, it walks every
+  fragment header (~160 KB apart) from the start to the target. Passed straight through, that was
+  one googlevideo request per read: ~80 for one seek, ~3/s while playing. The proxy now serves
+  ranges under 256 KB on a non-loopback listener from aligned 1 MiB upstream blocks (16 cached).
+  Whole test: 17 upstream requests. A seek to 13 min still downloads the first 13 MB, because of
+  the fragment walk. A remux to a plain MP4 with a full sample table would fix that and the
+  duration, but it's not needed yet.
+- **A VPN that blocks LAN traffic hides every speaker** (Proton VPN as the default route: no
+  SSDP replies, router unreachable). Discovery now sends on every IPv4 interface, but the app
+  will need a "no speakers found; check VPN or firewall" hint.
+- `proxy::start_on(ip)` binds to the address that reaches the speaker
+  (`sonos::local_ip_toward`). On a non-loopback address it serves only `/stream/{token}`, never
+  the lazy `/v/` and `/vv/` routes, so other machines on the LAN can't make this one run yt-dlp.
+  The webview's loopback proxy is unchanged (no block cache there).
+- Not yet tried: a grouped target (commands go to the coordinator; parsed, not exercised), track
+  end/next track, GENA event subscriptions, macOS (Local Network permission prompt), and the
+  Webamp side (a `SonosMedia` IMedia class).

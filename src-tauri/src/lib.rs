@@ -2,6 +2,7 @@ pub mod audio_out;
 pub mod config;
 pub mod proxy;
 pub mod resolve;
+pub mod sonos;
 
 use std::sync::Arc;
 

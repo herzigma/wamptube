@@ -19,6 +19,7 @@ deno task build                   # type-check (tsc --noEmit) + front-end produc
 cd src-tauri
 cargo test                        # offline: unit tests + proxy against a fake upstream
 cargo test --test live_proxy -- --ignored --nocapture   # live: real yt-dlp + googlevideo
+cargo test --test live_sonos -- --ignored --nocapture   # live: plays a track on a Sonos (WAMPTUBE_SONOS_ROOM)
 cargo clippy --all-targets
 ```
 
@@ -109,6 +110,9 @@ Two halves. The webview draws the UI and never contacts YouTube; the Rust core o
   `GET|HEAD /stream/{token}` and `/v/{video_id}` with CORS and Range support so Webamp's Web Audio
   graph can use it. `/v/` resolves the video with yt-dlp on its first request (in a detached task,
   one at a time, failures cached 30 s), which is how a 56-track playlist loads without 56 resolves.
+- `src-tauri/src/sonos.rs` – spike, not wired to the UI: Sonos discovery (SSDP on every interface),
+  group topology, and transport/volume SOAP calls. A speaker fetches from `proxy::start_on(lan_ip)`,
+  which serves only `/stream/{token}` and answers small ranges from cached 1 MiB blocks. See NOTES.md.
 - `src-tauri/src/lib.rs` – Tauri setup, starts the proxy, registers the commands.
 
 ### Contract between the halves
