@@ -142,6 +142,51 @@ fn proxy_base(proxy: tauri::State<'_, Arc<proxy::ProxyState>>) -> String {
 }
 
 /// Append a source to the config file. Returns false if it was already there.
+/// Sonos rooms on the network (takes ~2 s). Empty when none answer.
+#[tauri::command(rename_all = "snake_case")]
+async fn sonos_rooms(sonos: tauri::State<'_, Arc<sonos::Player>>) -> Result<Vec<sonos::Room>, String> {
+    sonos.rooms().await
+}
+
+/// Start `video_id` on the room at `ip`; returns its duration in seconds.
+#[tauri::command(rename_all = "snake_case")]
+async fn sonos_play_video(sonos: tauri::State<'_, Arc<sonos::Player>>, ip: String, video_id: String) -> Result<u32, String> {
+    let ip = sonos.check(&ip).await?;
+    sonos.play_video(ip, &video_id).await
+}
+
+/// `action`: play, pause, stop, seek (`value` seconds) or volume (`value` 0-100).
+#[tauri::command(rename_all = "snake_case")]
+async fn sonos_control(
+    sonos: tauri::State<'_, Arc<sonos::Player>>,
+    ip: String,
+    action: String,
+    value: Option<u32>,
+) -> Result<(), String> {
+    let ip = sonos.check(&ip).await?;
+    let so = &sonos.so;
+    match (action.as_str(), value) {
+        ("play", _) => so.play(ip).await,
+        ("pause", _) => so.pause(ip).await,
+        ("stop", _) => so.stop(ip).await,
+        ("seek", Some(s)) => so.seek(ip, s).await,
+        ("volume", Some(v)) => so.set_volume(ip, v.min(100) as u8).await,
+        _ => Err(format!("bad sonos action {action} {value:?}")),
+    }
+}
+
+#[tauri::command(rename_all = "snake_case")]
+async fn sonos_status(sonos: tauri::State<'_, Arc<sonos::Player>>, ip: String) -> Result<sonos::Status, String> {
+    let ip = sonos.check(&ip).await?;
+    sonos.status(ip).await
+}
+
+#[tauri::command(rename_all = "snake_case")]
+async fn sonos_volume(sonos: tauri::State<'_, Arc<sonos::Player>>, ip: String) -> Result<u8, String> {
+    let ip = sonos.check(&ip).await?;
+    sonos.so.volume(ip).await
+}
+
 #[tauri::command]
 async fn save_source(source: String) -> Result<bool, String> {
     let canonical = resolve::parse_source(&source)?.canonical_url();
@@ -154,10 +199,21 @@ pub fn run() {
         .setup(|app| {
             let proxy = tauri::async_runtime::block_on(proxy::start())?;
             app.manage(proxy);
+            app.manage(Arc::new(sonos::Player::default()));
             audio_out::allow_device_list(app);
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![startup_tracks, list_source, save_source, proxy_base])
+        .invoke_handler(tauri::generate_handler![
+            startup_tracks,
+            list_source,
+            save_source,
+            proxy_base,
+            sonos_rooms,
+            sonos_play_video,
+            sonos_control,
+            sonos_status,
+            sonos_volume
+        ])
         .run(tauri::generate_context!())
         .expect("error while running wamptube");
 }
