@@ -6,6 +6,17 @@
 // nothing here ever records. WKWebView has no setSinkId, so on macOS the
 // submenu is never added. The choice is kept by device name in localStorage
 // and re-applied at launch and whenever devices come and go.
+//
+// Sonos rooms (sonosmedia.ts) follow, under a separator, on every platform.
+// Picking one moves playback to that room; the choice is not kept across launches.
+
+export interface Room { name: string; ip: string }
+/** Sonos hooks from sonosmedia.ts, passed in so this module imports no DOM code. */
+export interface SonosHooks {
+  rooms: () => Room[];
+  current: () => Room | null;
+  routeTo: (room: Room | null) => unknown;
+}
 
 export interface Output { id: string; label: string }
 type DeviceLike = Pick<MediaDeviceInfo, 'kind' | 'deviceId' | 'label'>;
@@ -33,12 +44,14 @@ function saveLabel(label: string) {
   try { if (label) localStorage.setItem(KEY, label); else localStorage.removeItem(KEY); } catch { /* not kept */ }
 }
 
-export function installOutputMenu(el: HTMLMediaElement) {
-  if (!('setSinkId' in el) || !navigator.mediaDevices?.enumerateDevices) return;
+export function installOutputMenu(el: HTMLMediaElement, sonos: SonosHooks) {
+  // Local devices need setSinkId (WebView2); WKWebView has a single "This computer".
+  const canPick = 'setSinkId' in el && !!navigator.mediaDevices?.enumerateDevices;
   let outputs: Output[] = [];
   let defaultName = '';
 
   const apply = async () => {
+    if (!canPick) return;
     const want = savedLabel();
     const id = outputs.find((o) => o.label === want)?.id ?? ''; // gone or unset: system default
     if (el.sinkId === id) return;
@@ -55,29 +68,50 @@ export function installOutputMenu(el: HTMLMediaElement) {
     defaultName = defaultOutputName(devices);
     await apply();
   };
-  void refresh();
-  navigator.mediaDevices.addEventListener('devicechange', () => void refresh());
+  if (canPick) {
+    void refresh();
+    navigator.mediaDevices.addEventListener('devicechange', () => void refresh());
+  }
+  sonos.rooms(); // discover at launch so the first menu already lists them
 
   // Webamp renders a context menu into #webamp-context-menu only while it is open.
   // Add the submenu to the main menu (the one ending in "Exit"), above "Options".
   const addTo = (menu: Element) => {
-    if (outputs.length === 0 || menu.querySelector(':scope > .wamptube-output')) return;
+    const rooms = sonos.rooms();
+    if ((outputs.length === 0 && rooms.length === 0) || menu.querySelector(':scope > .wamptube-output')) return;
     const items = [...menu.children];
     const exit = items.find((li) => li.textContent === 'Exit');
     if (!exit) return;
+    const room = sonos.current();
     const current = savedLabel();
     const sub = document.createElement('ul');
-    const item = (label: string, text: string) => {
+    const item = (text: string, checked: boolean, pick: () => void) => {
       const li = document.createElement('li');
       li.textContent = text;
-      if (label === current || (!current && label === '')) li.classList.add('checked');
-      li.addEventListener('click', () => { saveLabel(label); void apply(); }); // Webamp closes the menu
+      if (checked) li.classList.add('checked');
+      li.addEventListener('click', pick); // Webamp closes the menu
       return li;
     };
-    sub.append(
-      item('', defaultName ? `System default (${defaultName})` : 'System default'),
-      ...outputs.map((o) => item(o.label, o.label)),
-    );
+    const local = (label: string, text: string) =>
+      item(text, !room && (label === current || (!current && label === '')), () => {
+        saveLabel(label);
+        void apply();
+        void sonos.routeTo(null);
+      });
+    if (canPick && outputs.length > 0) {
+      sub.append(
+        local('', defaultName ? `System default (${defaultName})` : 'System default'),
+        ...outputs.map((o) => local(o.label, o.label)),
+      );
+    } else {
+      sub.append(item('This computer', !room, () => void sonos.routeTo(null)));
+    }
+    if (rooms.length > 0) {
+      const hr = document.createElement('li');
+      hr.className = 'hr';
+      hr.append(document.createElement('hr'));
+      sub.append(hr, ...rooms.map((r) => item(`Sonos: ${r.name}`, room?.ip === r.ip, () => void sonos.routeTo(r))));
+    }
     const parent = document.createElement('li');
     parent.className = 'parent wamptube-output';
     parent.append(sub, 'Output device');

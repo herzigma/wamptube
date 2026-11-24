@@ -234,6 +234,29 @@ Ceiling (Connect:Amp) and Office/Attic (Play:3).
   (`sonos::local_ip_toward`). On a non-loopback address it serves only `/stream/{token}`, never
   the lazy `/v/` and `/vv/` routes, so other machines on the LAN can't make this one run yt-dlp.
   The webview's loopback proxy is unchanged (no block cache there).
-- Not yet tried: a grouped target (commands go to the coordinator; parsed, not exercised), track
-  end/next track, GENA event subscriptions, macOS (Local Network permission prompt), and the
-  Webamp side (a `SonosMedia` IMedia class).
+
+### Wired into the player (2026-11-24)
+
+Output device menu lists "Sonos: <room>" (one per zone group) under the local devices; picking one
+moves the current track there at the same position (`src/sonosmedia.ts`, `RoutedMedia` as Webamp's
+media class). `VITE_SELFTEST=sonos VITE_SONOS_ROOM=Office/Attic` in the real app (Windows), all
+pass: local start, move to the room (playing from 6 s, local element paused), slider volume
+reaches the speaker (6 -> 3), Webamp seek to 598/1197 s (speaker at 601), pause holds, resume,
+next track, end-of-track advance (speaker STOPPED at 335/335 s -> track 3 starts), and moving back
+here (speaker stops, local resumes at the speaker's position). 16 upstream block fetches in all.
+
+- **End of track is inferred by polling.** `SonosMedia` polls `GetTransportInfo` +
+  `GetPositionInfo` once a second while playing; STOPPED within 5 s of the duration means
+  `ended`. STOPPED elsewhere (someone pressed stop in the Sonos app) just stops. Ignored for 5 s
+  after each command, since the speaker reports STOPPED/TRANSITIONING briefly after Play or Seek.
+- **Webamp keeps durations in `tracks[id].duration`**, set from `media.duration()` on
+  `fileLoaded`; `state.media.length` stays 0. Sonos reports duration 0, so `sonos_play_video`
+  returns yt-dlp's and `SonosMedia` emits `fileLoaded` again once it has it.
+- **Nothing reaches the speaker until play.** Loading track 1 at launch, or browsing, doesn't
+  touch the room; `sonos_play_video` (resolve + LAN proxy + SetAVTransportURI + Play) runs then.
+- The volume slider follows the output: on switching to a room it is set to that room's volume
+  (so nothing jumps), and back here to the old local volume.
+- Not done: pause/stop/volume changed from the Sonos app don't reach Webamp's UI (no GENA events;
+  only position and stop are polled), the room choice isn't kept across launches, grouped targets
+  are untested, EQ and visualizers do nothing while a room plays, and macOS is untried (Local
+  Network permission prompt; WKWebView menu shows "This computer" plus the rooms).

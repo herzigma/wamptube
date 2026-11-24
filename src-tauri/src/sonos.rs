@@ -4,7 +4,13 @@
 //! subscriptions yet, callers poll.
 
 use std::net::{IpAddr, SocketAddr};
+use std::sync::Arc;
 use std::time::Duration;
+
+use serde::Serialize;
+use tokio::sync::Mutex;
+
+use crate::{proxy, resolve};
 
 const SSDP_ADDR: &str = "239.255.255.250:1900";
 const ZONE_PLAYER: &str = "urn:schemas-upnp-org:device:ZonePlayer:1";
@@ -227,6 +233,113 @@ impl Sonos {
     }
 }
 
+/// A room the UI can send audio to: one zone group, addressed by its
+/// coordinator. Keys are snake_case by contract.
+#[derive(Debug, Clone, Serialize)]
+pub struct Room {
+    /// Member rooms joined with " + ".
+    pub name: String,
+    pub ip: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct Status {
+    /// `PLAYING`, `PAUSED_PLAYBACK`, `STOPPED` or `TRANSITIONING`.
+    pub state: String,
+    pub rel_s: u32,
+}
+
+/// The app's Sonos output: discovery results, and a proxy on the LAN address
+/// that reaches the speakers (started on first use).
+pub struct Player {
+    pub so: Sonos,
+    known: Mutex<Vec<IpAddr>>,
+    lan: Mutex<Option<Arc<proxy::ProxyState>>>,
+}
+
+impl Default for Player {
+    fn default() -> Self {
+        Self { so: Sonos::new(), known: Mutex::new(Vec::new()), lan: Mutex::new(None) }
+    }
+}
+
+impl Player {
+    /// Discover speakers and return one room per zone group.
+    pub async fn rooms(&self) -> Result<Vec<Room>, String> {
+        let ips = discover_ips(Duration::from_secs(2)).await.map_err(|e| e.to_string())?;
+        for ip in &ips {
+            let Ok(groups) = self.so.groups(*ip).await else { continue };
+            let rooms = rooms_from_groups(&groups);
+            *self.known.lock().await = rooms.iter().filter_map(|r| r.ip.parse().ok()).collect();
+            return Ok(rooms);
+        }
+        Ok(Vec::new())
+    }
+
+    /// `ip` as an address, if discovery returned it (the webview can't aim
+    /// SOAP requests at arbitrary hosts).
+    pub async fn check(&self, ip: &str) -> Result<IpAddr, String> {
+        let ip: IpAddr = ip.parse().map_err(|_| format!("bad speaker address {ip}"))?;
+        if self.known.lock().await.contains(&ip) {
+            Ok(ip)
+        } else {
+            Err(format!("{ip} is not a discovered Sonos room"))
+        }
+    }
+
+    async fn proxy_toward(&self, speaker: IpAddr) -> Result<Arc<proxy::ProxyState>, String> {
+        let local = local_ip_toward(speaker).map_err(|e| e.to_string())?;
+        let mut lan = self.lan.lock().await;
+        if let Some(px) = lan.as_ref().filter(|px| px.host == local) {
+            return Ok(px.clone());
+        }
+        let px = proxy::start_on(local).await.map_err(|e| format!("LAN proxy on {local}: {e}"))?;
+        *lan = Some(px.clone());
+        Ok(px)
+    }
+
+    /// Resolve `video_id`, serve it on the LAN and start it on the speaker.
+    /// Returns yt-dlp's duration: Sonos reports 0 for these streams.
+    pub async fn play_video(&self, ip: IpAddr, video_id: &str) -> Result<u32, String> {
+        if !resolve::is_valid_video_id(video_id) {
+            return Err(format!("invalid video id {video_id}"));
+        }
+        let px = self.proxy_toward(ip).await?;
+        let t = resolve::resolve(video_id).await?;
+        let url = px.register(&t).await;
+        eprintln!("[sonos] {ip} <- {video_id} {} ({}s)", t.title, t.duration_s);
+        let meta = didl(&url, "audio/mp4", &t.title, t.channel.as_deref(), t.duration_s);
+        self.so.set_uri(ip, &url, &meta).await?;
+        self.so.play(ip).await?;
+        Ok(t.duration_s)
+    }
+
+    pub async fn status(&self, ip: IpAddr) -> Result<Status, String> {
+        let state = self.so.transport_state(ip).await?;
+        let rel_s = self.so.position(ip).await?.rel_s;
+        Ok(Status { state, rel_s })
+    }
+}
+
+/// One room per group, named after its visible members, sorted by name.
+pub fn rooms_from_groups(groups: &[Group]) -> Vec<Room> {
+    let mut rooms: Vec<Room> = groups
+        .iter()
+        .filter_map(|g| {
+            let coord = g.members.iter().find(|m| m.0 == g.coordinator)?;
+            let mut names: Vec<&str> = Vec::new();
+            for m in &g.members {
+                if !names.contains(&m.2.as_str()) {
+                    names.push(&m.2);
+                }
+            }
+            Some(Room { name: names.join(" + "), ip: coord.1.to_string() })
+        })
+        .collect();
+    rooms.sort_by(|a, b| a.name.cmp(&b.name));
+    rooms
+}
+
 /// DIDL-Lite metadata so the Sonos app shows the title and channel.
 pub fn didl(uri: &str, mime: &str, title: &str, creator: Option<&str>, duration_s: u32) -> String {
     let creator = creator.map(|c| format!("<dc:creator>{}</dc:creator>", xml_escape(c))).unwrap_or_default();
@@ -322,6 +435,15 @@ mod tests {
         assert_eq!(g[0].members.len(), 1, "invisible satellite dropped");
         assert_eq!(g[1].members[0].1, "192.168.1.30".parse::<IpAddr>().unwrap());
         assert_eq!(g[1].members[0].2, "Den & Office");
+    }
+
+    #[test]
+    fn rooms_one_per_group() {
+        let xml = r#"<ZoneGroup Coordinator="RINCON_B" ID="x"><ZoneGroupMember UUID="RINCON_A" Location="http://10.0.0.2:1400/x" ZoneName="Office"/><ZoneGroupMember UUID="RINCON_B" Location="http://10.0.0.3:1400/x" ZoneName="Attic"/></ZoneGroup><ZoneGroup Coordinator="RINCON_C" ID="y"><ZoneGroupMember UUID="RINCON_C" Location="http://10.0.0.4:1400/x" ZoneName="Den"/></ZoneGroup><ZoneGroup Coordinator="RINCON_Z" ID="z"></ZoneGroup>"#;
+        let rooms = rooms_from_groups(&parse_zone_groups(xml));
+        assert_eq!(rooms.len(), 2, "a group without its coordinator is skipped");
+        assert_eq!((rooms[0].name.as_str(), rooms[0].ip.as_str()), ("Den", "10.0.0.4"));
+        assert_eq!((rooms[1].name.as_str(), rooms[1].ip.as_str()), ("Office + Attic", "10.0.0.3"));
     }
 
     #[test]
