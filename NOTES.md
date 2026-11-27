@@ -237,7 +237,9 @@ Ceiling (Connect:Amp) and Office/Attic (Play:3).
 
 ### Wired into the player (2026-11-24)
 
-Output device menu lists "Sonos: <room>" (one per zone group) under the local devices; picking one
+Output device menu lists "Sonos: <room>" (one per zone group) under the local devices (a grey
+"Searching for Sonos…" or "No Sonos rooms found" line when there are none; until 2026-11-27 the
+whole submenu was hidden on macOS in that case, which made it hard to find); picking one
 moves the current track there at the same position (`src/sonosmedia.ts`, `RoutedMedia` as Webamp's
 media class). `VITE_SELFTEST=sonos VITE_SONOS_ROOM=Office/Attic` in the real app (Windows), all
 pass: local start, move to the room (playing from 6 s, local element paused), slider volume

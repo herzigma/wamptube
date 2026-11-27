@@ -3,17 +3,21 @@
 //
 // Chromium (WebView2) shows device names and ids only to a page holding
 // microphone permission; src-tauri/src/audio_out.rs grants it at startup and
-// nothing here ever records. WKWebView has no setSinkId, so on macOS the
-// submenu is never added. The choice is kept by device name in localStorage
+// nothing here ever records. WKWebView has no setSinkId, so macOS lists a
+// single "This computer". The choice is kept by device name in localStorage
 // and re-applied at launch and whenever devices come and go.
 //
-// Sonos rooms (sonosmedia.ts) follow, under a separator, on every platform.
-// Picking one moves playback to that room; the choice is not kept across launches.
+// Sonos rooms (sonosmedia.ts) follow, under a separator, on every platform,
+// with a grey "Searching..." or "No Sonos rooms found" line while there are none,
+// so the submenu is always there. Picking a room moves playback to it; the
+// choice is not kept across launches.
 
 export interface Room { name: string; ip: string }
 /** Sonos hooks from sonosmedia.ts, passed in so this module imports no DOM code. */
 export interface SonosHooks {
   rooms: () => Room[];
+  /** The discovery in progress, if any. */
+  searching: () => Promise<unknown> | null;
   current: () => Room | null;
   routeTo: (room: Room | null) => unknown;
 }
@@ -77,8 +81,7 @@ export function installOutputMenu(el: HTMLMediaElement, sonos: SonosHooks) {
   // Webamp renders a context menu into #webamp-context-menu only while it is open.
   // Add the submenu to the main menu (the one ending in "Exit"), above "Options".
   const addTo = (menu: Element) => {
-    const rooms = sonos.rooms();
-    if ((outputs.length === 0 && rooms.length === 0) || menu.querySelector(':scope > .wamptube-output')) return;
+    if (menu.querySelector(':scope > .wamptube-output')) return;
     const items = [...menu.children];
     const exit = items.find((li) => li.textContent === 'Exit');
     if (!exit) return;
@@ -106,12 +109,29 @@ export function installOutputMenu(el: HTMLMediaElement, sonos: SonosHooks) {
     } else {
       sub.append(item('This computer', !room, () => void sonos.routeTo(null)));
     }
-    if (rooms.length > 0) {
-      const hr = document.createElement('li');
-      hr.className = 'hr';
-      hr.append(document.createElement('hr'));
-      sub.append(hr, ...rooms.map((r) => item(`Sonos: ${r.name}`, room?.ip === r.ip, () => void sonos.routeTo(r))));
-    }
+    const hr = document.createElement('li');
+    hr.className = 'hr';
+    hr.append(document.createElement('hr'));
+    sub.append(hr);
+    // The Sonos part, redrawn if a discovery finishes while the menu is open.
+    let shown: Element[] = [];
+    const showRooms = () => {
+      const rooms = sonos.rooms(); // also starts a fresh discovery if the last is stale
+      const busy = sonos.searching();
+      shown.forEach((li) => li.remove());
+      if (rooms.length > 0) {
+        shown = rooms.map((r) => item(`Sonos: ${r.name}`, room?.ip === r.ip, () => void sonos.routeTo(r)));
+      } else {
+        const note = document.createElement('li');
+        note.className = 'wamptube-note';
+        note.textContent = busy ? 'Searching for Sonos…' : 'No Sonos rooms found';
+        note.addEventListener('click', (e) => e.stopPropagation()); // keep the menu open
+        shown = [note];
+      }
+      sub.append(...shown);
+      void busy?.then(() => { if (sub.isConnected) showRooms(); });
+    };
+    showRooms();
     const parent = document.createElement('li');
     parent.className = 'parent wamptube-output';
     parent.append(sub, 'Output device');

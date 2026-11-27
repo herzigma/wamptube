@@ -99,7 +99,8 @@ Two halves. The webview draws the UI and never contacts YouTube; the Rust core o
   DOM injection when it opens (Webamp has no menu API). Local devices: `setSinkId` on the one media
   element, choice kept by device name in localStorage (WebView2 only; WKWebView has no `setSinkId`,
   so macOS shows a single "This computer"). Below a separator, "Sonos: <room>" entries on every
-  platform; a room choice is not kept across launches. Gets its Sonos hooks as a parameter so it
+  platform, or a grey "Searching for Sonos…" / "No Sonos rooms found" line, so the submenu is
+  always there; a room choice is not kept across launches. Gets its Sonos hooks as a parameter so it
   imports no DOM code (the Deno web tests import it).
 - `src-tauri/src/audio_out.rs` – Windows: grants the app's own origins microphone permission through
   WebView2's profile API at startup, because Chromium hides output-device names and ids without it.
