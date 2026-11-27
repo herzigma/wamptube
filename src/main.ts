@@ -5,7 +5,7 @@ if (import.meta.env.VITE_SPIKE) location.replace('/spike.html');
 import { invoke } from '@tauri-apps/api/core';
 import { getCurrentWindow, LogicalSize } from '@tauri-apps/api/window';
 import { fxAudio, videoEl } from './msemedia';
-import { RoutedMedia, currentRoom, onSliderSync, routeTo, sonosRooms, type Room } from './sonosmedia';
+import { RoutedMedia, currentRoom, onSliderSync, routeTo, sonosRooms, sonosSearching, type Room } from './sonosmedia';
 import { demoSource } from './fx';
 import { installThrobber } from './throbber';
 import { installOutputMenu } from './output';
@@ -373,7 +373,7 @@ async function main() {
 
   setBaseSkin = () => webamp.setSkinFromUrl(WAMPTUBE_SKIN);
   onSliderSync((v) => webamp.setVolume(v));
-  installOutputMenu(videoEl, { rooms: () => sonosRooms(), current: currentRoom, routeTo });
+  installOutputMenu(videoEl, { rooms: () => sonosRooms(), searching: sonosSearching, current: currentRoom, routeTo });
 
   const inTauri = '__TAURI_INTERNALS__' in window;
   if (inTauri) {

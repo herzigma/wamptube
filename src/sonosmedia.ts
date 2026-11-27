@@ -211,6 +211,9 @@ export function sonosRooms(onUpdate?: (r: Room[]) => void): Room[] {
   return rooms;
 }
 
+/** The discovery in progress, if any. */
+export function sonosSearching(): Promise<Room[]> | null { return looking; }
+
 type Media = MseMedia | SonosMedia;
 
 /** Webamp's media class: forwards to the local engine or to the Sonos room. */

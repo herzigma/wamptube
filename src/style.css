@@ -33,6 +33,12 @@ html, body {
   transform: scale(var(--ui-scale));
   transform-origin: 0 0;
 }
+/* Output device > "Searching for Sonos..." / "No Sonos rooms found": grey, inert. */
+#webamp-context-menu .context-menu li.wamptube-note,
+#webamp-context-menu .context-menu li.wamptube-note:hover {
+  color: #808080;
+  background-color: #ffffff;
+}
 /* No text selection in the player: dragging Webamp's resize handle (and other
    drags) would otherwise sweep a WebKit selection across the playlist. */
 #webamp, #webamp *, #webamp-context-menu, #webamp-context-menu * {
