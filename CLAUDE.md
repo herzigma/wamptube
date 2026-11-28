@@ -102,6 +102,12 @@ Two halves. The webview draws the UI and never contacts YouTube; the Rust core o
   platform, or a grey "Searching for Sonos…" / "No Sonos rooms found" line, so the submenu is
   always there; a room choice is not kept across launches. Gets its Sonos hooks as a parameter so it
   imports no DOM code (the Deno web tests import it).
+- `src/nativemenu.ts` – every Webamp menu (main, right-click, EQ presets, playlist buttons) shows
+  as a real OS popup menu, so it can extend past the window. Webamp still renders its HTML menu,
+  hidden by the `native-menus` class; a MutationObserver copies it into a Tauri `Menu` at the
+  cursor and, on a pick, clicks the matching HTML item (dismissing sends Webamp's click-away). So
+  anything injected into the HTML menu, like `output.ts`'s submenu, appears natively for free.
+  The native menu is a snapshot: it does not redraw while open.
 - `src-tauri/src/audio_out.rs` – Windows: grants the app's own origins microphone permission through
   WebView2's profile API at startup, because Chromium hides output-device names and ids without it.
   Nothing calls getUserMedia; the grant only unlocks `enumerateDevices`.

@@ -136,6 +136,11 @@ which runs the full resolve on the first request for that video.
 - `u1MqeDGBo94` is 1,197 s with 15 chapters; `dkrpqUyiZgA` is 2,696 s with 14 chapters (channel is "The Moment", performer ATTAME). Both have chapter markers for later splitting.
 - **Extra Webamp windows** (for Library / Discover): no public option. `WindowId` is fixed to main / playlist / equalizer / milkdrop. An internal `ADD_GEN_WINDOW` action and `genWindows` reducer slice exist but are only reachable by dispatching to `webamp.store`; untried. Default plan stands: separate Tauri windows.
 - Window positions use Webamp's public `windowLayout` option.
+- **Menus are native (2026-11-28).** Webamp's HTML menus were clipped at the window edges, worst
+  with panes collapsed. `nativemenu.ts` mirrors each into a Tauri popup menu and clicks the hidden
+  HTML item on a pick. Untested so far: whether Load Skin... and Play > File... still open a file
+  picker (the click no longer comes from a user gesture), and macOS. A native menu doesn't redraw
+  while open, so the Sonos list shows what was known when it opened.
 - The spec says "two hardcoded test videos" but its table lists three; all three are in the playlist.
 - CSP is explicit. Milkdrop/butterchurn would need `'unsafe-eval'` in `script-src`; it is not enabled.
 - Versions: tauri 2.12.5, axum 0.8.9, reqwest 0.13.5, webamp 2.3.1, vite 8.3.8, typescript 7.0.2.
