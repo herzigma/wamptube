@@ -8,6 +8,7 @@ import { fxAudio, videoEl } from './msemedia';
 import { RoutedMedia, currentRoom, onSliderSync, routeTo, sonosRooms, sonosSearching, type Room } from './sonosmedia';
 import { demoSource } from './fx';
 import { installThrobber } from './throbber';
+import { installNativeMenus } from './nativemenu';
 import { installOutputMenu } from './output';
 import {
   VIDEO_STACK_FLOOR,
@@ -377,6 +378,7 @@ async function main() {
 
   const inTauri = '__TAURI_INTERNALS__' in window;
   if (inTauri) {
+    installNativeMenus();
     webamp.onClose(() => {
       getCurrentWindow().close().catch((e) => console.error('close failed', e));
     });
